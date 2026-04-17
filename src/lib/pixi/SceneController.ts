@@ -2,6 +2,7 @@ import {
   Application,
   Container,
   Graphics,
+  Rectangle,
   Texture,
   TilingSprite,
   FederatedPointerEvent,
@@ -105,7 +106,7 @@ export class SceneController {
     g.circle(size / 2, size / 2, 1.2).fill({ color: dotColor, alpha: 1 });
     const tex = this.app.renderer.generateTexture({
       target: g,
-      textureSourceOptions: { width: size, height: size },
+      frame: new Rectangle(0, 0, size, size),
     });
     const sprite = new TilingSprite({
       texture: tex,
