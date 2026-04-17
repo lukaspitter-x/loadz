@@ -22,6 +22,7 @@ export default function InfiniteCanvas() {
     scene.init(theme, loaders).then(() => {
       if (cancelled) return;
       sceneRef.current = scene;
+      (window as unknown as { __loaderScene?: SceneController }).__loaderScene = scene;
       scene.setSelected(selectedId);
     });
 
@@ -63,6 +64,7 @@ export default function InfiniteCanvas() {
       if (sceneRef.current) {
         sceneRef.current.destroy();
         sceneRef.current = null;
+        delete (window as unknown as { __loaderScene?: SceneController }).__loaderScene;
       } else {
         scene.destroy();
       }
