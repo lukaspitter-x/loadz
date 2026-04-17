@@ -32,6 +32,7 @@ export class SceneController {
   } | null = null;
   private bgColor = 0x0a0a0a;
   private destroyed = false;
+  private ready = false;
 
   constructor(host: HTMLElement, callbacks: SceneCallbacks) {
     this.host = host;
@@ -48,7 +49,12 @@ export class SceneController {
       autoDensity: true,
     });
     if (this.destroyed) {
-      this.app.destroy(true, { children: true });
+      // Init finished after caller called destroy — tear down now.
+      try {
+        this.app.destroy(true, { children: true });
+      } catch {
+        /* ignore */
+      }
       return;
     }
     this.bgColor = initialTheme === "dark" ? 0x0a0a0a : 0xf5f5f5;
@@ -88,6 +94,8 @@ export class SceneController {
     this.app.stage.on("pointermove", this.onStageMove);
     this.app.stage.on("pointerup", this.onStageUp);
     this.app.stage.on("pointerupoutside", this.onStageUp);
+
+    this.ready = true;
   }
 
   private createDotBackground(theme: "dark" | "light") {
@@ -97,7 +105,7 @@ export class SceneController {
     g.circle(size / 2, size / 2, 1.2).fill({ color: dotColor, alpha: 1 });
     const tex = this.app.renderer.generateTexture({
       target: g,
-      frame: { x: 0, y: 0, width: size, height: size } as any,
+      textureSourceOptions: { width: size, height: size },
     });
     const sprite = new TilingSprite({
       texture: tex,
@@ -257,12 +265,18 @@ export class SceneController {
   destroy() {
     this.destroyed = true;
     window.removeEventListener("resize", this.onResize);
-    if (this.app) {
+    if (!this.ready) {
+      // init() is still pending — it will notice `destroyed` and tear down itself.
+      return;
+    }
+    try {
       this.app.stage.off("pointerdown", this.onStageDown);
       this.app.stage.off("pointermove", this.onStageMove);
       this.app.stage.off("pointerup", this.onStageUp);
       this.app.stage.off("pointerupoutside", this.onStageUp);
       this.app.destroy(true, { children: true, texture: true });
+    } catch (err) {
+      console.warn("SceneController.destroy:", err);
     }
   }
 }
