@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Loader Builder",
-  description: "Design custom PixiJS loading animations on an infinite canvas.",
+  description: "Design tiny 12×12 loading animations and export as React / SVG / PNG.",
 };
 
 export default function RootLayout({
