@@ -19,6 +19,8 @@ interface Instance {
   shape: CellShape;
   bg: BgStyle;
   fps: number;
+  size: number;
+  padding: number;
   gridSize: number;
   cellSizeFactor: number;
   colors: LoaderColors;

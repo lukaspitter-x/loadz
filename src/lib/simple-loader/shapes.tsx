@@ -17,13 +17,8 @@ export function ShapeNode({
   nodeRef?: (el: SVGGraphicsElement | null) => void;
 }) {
   const s = size;
-  const commonStyle: CSSProperties = {
-    transformBox: "fill-box",
-    transformOrigin: "center",
-    ...style,
-  };
   if (shape === "circle") {
-    return <circle ref={nodeRef as (el: SVGCircleElement | null) => void} cx={cx} cy={cy} r={s / 2} style={commonStyle} />;
+    return <circle ref={nodeRef as (el: SVGCircleElement | null) => void} cx={cx} cy={cy} r={s / 2} style={style} />;
   }
   if (shape === "square" || shape === "rounded-rect") {
     return (
@@ -34,12 +29,12 @@ export function ShapeNode({
         width={s}
         height={s}
         rx={shape === "rounded-rect" ? s * 0.25 : 0}
-        style={commonStyle}
+        style={style}
       />
     );
   }
   const points = polyPoints(shape, cx, cy, s);
-  return <polygon ref={nodeRef as (el: SVGPolygonElement | null) => void} points={points} style={commonStyle} />;
+  return <polygon ref={nodeRef as (el: SVGPolygonElement | null) => void} points={points} style={style} />;
 }
 
 function polyPoints(shape: CellShape, cx: number, cy: number, s: number): string {

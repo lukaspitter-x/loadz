@@ -1,17 +1,26 @@
 "use client";
 
-import { useEffect, useId, useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AnimStyle, BgStyle, CellShape, LoaderColors } from "@/lib/types";
 import {
+  CONSTELLATION_COUNT,
+  MOLECULAR_SATELLITES,
   NODE_EDGES,
   NODE_POSITIONS,
+  PULSE_NODE_COUNT,
   applyStyle,
   blendColor,
   globalT,
   gridPhaseT,
+  makeConstellation,
   makeScatterCells,
+  pulseNodePositions,
+  stepConstellation,
+  stepMolecular,
+  stepNetworkPulse,
   stepNodeGraph,
   stepScatter,
+  type ConstellationNode,
   type ScatterCell,
 } from "@/lib/simple-loader/math";
 import { type SimplePattern } from "@/lib/simple-loader/patterns";
@@ -27,12 +36,13 @@ import {
 } from "@/lib/simple-loader/glyphs";
 import { ShapeNode } from "@/lib/simple-loader/shapes";
 
-const SIZE = 12;
-const PAD = 1;
-const AREA = SIZE - PAD * 2; // 10
+const DEFAULT_SIZE = 12;
+const DEFAULT_PAD = 1;
 
 export interface SimpleLoaderProps {
   displayText: string;
+  size?: number;     // total loader dimension in px (e.g. 12, 16, 24…). Should be divisible by 4.
+  padding?: number;  // inner padding (on each side). Clamped so inner area stays > 0.
   grid?: { size: number };
   cellShape?: CellShape;
   cellSizeFactor?: number; // 0.3 .. 1.5, multiplies the grid pitch
@@ -48,6 +58,13 @@ export interface SimpleLoaderProps {
   shimmer?: { enabled: boolean; speed: number; mode?: TextFxMode };
   paused?: boolean;
   dataId?: string;
+  /**
+   * Optional CSS pixel size for the rendered SVG. When set, the SVG keeps its
+   * logical `size` coordinate space (viewBox) but is painted at `displayPx`
+   * CSS pixels. Avoids the iOS Safari bug where `transform: scale()` on an
+   * HTML ancestor leaves the SVG's internal content unscaled.
+   */
+  displayPx?: number;
 }
 
 export type TextFxMode = "shimmer" | "shine" | "gradient" | "cursor";
@@ -56,6 +73,8 @@ type GridCell = { r: number; c: number; cx: number; cy: number };
 
 export function SimpleLoader({
   displayText,
+  size: sizeProp = DEFAULT_SIZE,
+  padding: paddingProp = DEFAULT_PAD,
   grid = { size: 5 },
   cellShape = "rounded-rect",
   cellSizeFactor = 1,
@@ -66,9 +85,23 @@ export function SimpleLoader({
   shimmer,
   paused,
   dataId,
+  displayPx,
 }: SimpleLoaderProps) {
   const { pattern } = animation;
   const glowId = `glow-${useId().replace(/:/g, "")}`;
+  // Clamp geometry so AREA stays positive.
+  const SIZE = Math.max(4, sizeProp);
+  const PAD = Math.max(0, Math.min(paddingProp, Math.floor((SIZE - 2) / 2)));
+  const AREA = SIZE - PAD * 2;
+  // Helper shapes were designed at AREA=10 (SIZE=12, PAD=1); scale proportionally.
+  const s = AREA / 10;
+  const scatterCount = 28;
+  const scatterCellSize = 1.2 * s;
+  const scatterBound = 1 * s;
+  const nodeSize = 3 * s;
+  const edgeStroke = 0.3 * s;
+  const bgRadius = (SIZE / 12) * 2;
+
   // Status-glyph patterns always render on a 5×5 grid so the pixel glyphs read correctly.
   const isStatus = pattern === "success" || pattern === "error" || pattern === "warning";
   const effectiveSize = isStatus ? 5 : grid.size;
@@ -87,18 +120,19 @@ export function SimpleLoader({
       }
     }
     return { cells, cellSize: pitch * cellSizeFactor };
-  }, [effectiveSize, cellSizeFactor]);
+  }, [effectiveSize, cellSizeFactor, AREA, PAD]);
 
   const scatterStateRef = useRef<ScatterCell[]>([]);
-  const scatterCount = 28;
-  const scatterCellSize = 1.2;
-  const scatterBound = 1;
+  const constellationStateRef = useRef<ConstellationNode[]>([]);
 
   useEffect(() => {
     if (pattern === "scatter") {
       scatterStateRef.current = makeScatterCells(scatterCount, AREA);
     }
-  }, [pattern]);
+    if (pattern === "constellation") {
+      constellationStateRef.current = makeConstellation(AREA);
+    }
+  }, [pattern, AREA]);
 
   const shapeRefs = useRef<(SVGGraphicsElement | null)[]>([]);
   const edgeRefs = useRef<(SVGLineElement | null)[]>([]);
@@ -121,15 +155,24 @@ export function SimpleLoader({
       gridCells,
       scatterState: scatterStateRef.current,
       scatterBound,
+      constellationState: constellationStateRef.current,
+      area: AREA,
+      pad: PAD,
       refs: { shapes: shapeRefs.current, edges: edgeRefs.current },
     });
   });
+
+  // Live pause ref so the rAF loop self-exits immediately on pause, even if the
+  // effect cleanup hasn't run yet.
+  const pausedRef = useRef(!!paused);
+  pausedRef.current = !!paused;
 
   // rAF loop
   useEffect(() => {
     if (paused) return;
     let raf = 0;
     const loop = () => {
+      if (pausedRef.current) return;
       tickRef.current++;
       stepPattern({
         pattern,
@@ -143,6 +186,9 @@ export function SimpleLoader({
         gridCells,
         scatterState: scatterStateRef.current,
         scatterBound,
+        constellationState: constellationStateRef.current,
+        area: AREA,
+        pad: PAD,
         refs: { shapes: shapeRefs.current, edges: edgeRefs.current },
       });
       raf = requestAnimationFrame(loop);
@@ -151,7 +197,12 @@ export function SimpleLoader({
     return () => cancelAnimationFrame(raf);
   }, [pattern, animation.fps, animation.style, animation.backgroundStyle, effectiveSize, gridCells, colors, cellShape, paused]);
 
-  const isOffGrid = pattern === "scatter" || pattern === "node-graph";
+  const isOffGrid =
+    pattern === "scatter" ||
+    pattern === "node-graph" ||
+    pattern === "constellation" ||
+    pattern === "network-pulse" ||
+    pattern === "molecular";
 
   return (
     <span
@@ -170,16 +221,18 @@ export function SimpleLoader({
         data-loader-id={dataId}
         style={{
           background: transparentBg ? "transparent" : colors.background,
-          borderRadius: 2,
+          borderRadius: displayPx ? (displayPx / SIZE) * bgRadius : bgRadius,
           flexShrink: 0,
           display: "block",
           transition: "background 250ms ease",
+          width: displayPx,
+          height: displayPx,
         }}
       >
         {glow?.enabled && (
           <defs>
             <filter id={glowId} x="-50%" y="-50%" width="200%" height="200%">
-              <feGaussianBlur stdDeviation={glow.size} result="blur" />
+              <feGaussianBlur stdDeviation={glow.size * s} result="blur" />
               <feComponentTransfer in="blur" result="boosted">
                 <feFuncA type="linear" slope={glow.intensity} />
               </feComponentTransfer>
@@ -191,36 +244,85 @@ export function SimpleLoader({
           </defs>
         )}
         <g filter={glow?.enabled ? `url(#${glowId})` : undefined}>
-          {isOffGrid && pattern === "node-graph" && (
+          {pattern === "node-graph" && (
             <>
-              {NODE_EDGES.map(([a, b], i) => {
-                const [ax, ay] = NODE_POSITIONS[a];
-                const [bx, by] = NODE_POSITIONS[b];
-                return (
-                  <line
-                    key={`e${i}`}
-                    ref={(el) => { edgeRefs.current[i] = el; }}
-                    x1={PAD + ax * AREA}
-                    y1={PAD + ay * AREA}
-                    x2={PAD + bx * AREA}
-                    y2={PAD + by * AREA}
-                    strokeWidth={0.3}
-                  />
-                );
-              })}
-              {NODE_POSITIONS.map(([x, y], i) => (
-                <ShapeNode
-                  key={`n${i}`}
-                  shape={cellShape}
-                  cx={PAD + x * AREA}
-                  cy={PAD + y * AREA}
-                  size={3}
-                  nodeRef={(el) => { shapeRefs.current[i] = el; }}
+              {NODE_EDGES.map((_, i) => (
+                <line
+                  key={`e${i}`}
+                  ref={(el) => { edgeRefs.current[i] = el; }}
+                  strokeWidth={edgeStroke}
                 />
+              ))}
+              {NODE_POSITIONS.map((_, i) => (
+                <g key={`n${i}`} ref={(el) => { shapeRefs.current[i] = el; }}>
+                  <ShapeNode shape={cellShape} cx={0} cy={0} size={nodeSize} />
+                </g>
               ))}
             </>
           )}
-          {isOffGrid && pattern === "scatter" &&
+          {pattern === "constellation" && (
+            <>
+              {/* All pairs of nodes = C(N,2) edges; toggled alpha per frame */}
+              {Array.from({ length: (CONSTELLATION_COUNT * (CONSTELLATION_COUNT - 1)) / 2 }).map((_, i) => (
+                <line
+                  key={`ce${i}`}
+                  ref={(el) => { edgeRefs.current[i] = el; }}
+                  strokeWidth={edgeStroke * 0.8}
+                />
+              ))}
+              {Array.from({ length: CONSTELLATION_COUNT }).map((_, i) => (
+                <g key={`cn${i}`} ref={(el) => { shapeRefs.current[i] = el; }}>
+                  <ShapeNode shape={cellShape} cx={0} cy={0} size={nodeSize * 0.7} />
+                </g>
+              ))}
+            </>
+          )}
+          {pattern === "network-pulse" && (() => {
+            const pts = pulseNodePositions(AREA);
+            return (
+              <>
+                {pts.map((_, i) => {
+                  const a = pts[i];
+                  const b = pts[(i + 1) % pts.length];
+                  return (
+                    <line
+                      key={`pe${i}`}
+                      ref={(el) => { edgeRefs.current[i] = el; }}
+                      x1={PAD + a.x}
+                      y1={PAD + a.y}
+                      x2={PAD + b.x}
+                      y2={PAD + b.y}
+                      strokeWidth={edgeStroke}
+                    />
+                  );
+                })}
+                {pts.map((_, i) => (
+                  <g key={`pn${i}`} ref={(el) => { shapeRefs.current[i] = el; }}>
+                    <ShapeNode shape={cellShape} cx={0} cy={0} size={nodeSize * 0.7} />
+                  </g>
+                ))}
+              </>
+            );
+          })()}
+          {pattern === "molecular" && (
+            <>
+              {/* 3 bonds: center → satellite i */}
+              {Array.from({ length: MOLECULAR_SATELLITES }).map((_, i) => (
+                <line
+                  key={`me${i}`}
+                  ref={(el) => { edgeRefs.current[i] = el; }}
+                  strokeWidth={edgeStroke * 1.2}
+                />
+              ))}
+              {/* Center (shapeRefs[0]) + satellites (shapeRefs[1..]) */}
+              {Array.from({ length: MOLECULAR_SATELLITES + 1 }).map((_, i) => (
+                <g key={`mn${i}`} ref={(el) => { shapeRefs.current[i] = el; }}>
+                  <ShapeNode shape={cellShape} cx={0} cy={0} size={i === 0 ? nodeSize : nodeSize * 0.7} />
+                </g>
+              ))}
+            </>
+          )}
+          {pattern === "scatter" &&
             Array.from({ length: scatterCount }).map((_, i) => (
               <g
                 key={`s${i}`}
@@ -267,24 +369,70 @@ function TextLabel({
   if (!shimmer?.enabled) return <span>{text}</span>;
   const mode = shimmer.mode ?? "shimmer";
   if (mode === "cursor") {
-    ensureTextFxKeyframes();
-    return (
-      <span style={{ color, display: "inline-flex", alignItems: "center", gap: 2 }}>
-        <span>{text}</span>
+    return <TypewriterLabel text={text} color={color} speed={shimmer.speed} />;
+  }
+  return <span style={shimmerStyle(color, shimmer.speed, mode)}>{text}</span>;
+}
+
+function TypewriterLabel({ text, color, speed }: { text: string; color: string; speed: number }) {
+  const [typed, setTyped] = useState("");
+  const textRef = useRef(text);
+  textRef.current = text;
+  // Install keyframes synchronously so the cursor's CSS animation resolves on first paint.
+  ensureTextFxKeyframes();
+
+  useEffect(() => {
+    const charDelay = Math.max(25, 90 / Math.max(0.2, speed));
+    // Hold long enough to see the cursor blink ~3 times before the loop restarts.
+    const holdAfterFull = 3500;
+    const holdAfterEmpty = 500;
+    let timer: ReturnType<typeof setTimeout>;
+    let i = 0;
+    let phase: "typing" | "hold-full" | "hold-empty" = "typing";
+    const tick = () => {
+      const full = textRef.current;
+      if (phase === "typing") {
+        i++;
+        setTyped(full.slice(0, i));
+        if (i >= full.length) {
+          phase = "hold-full";
+          timer = setTimeout(tick, holdAfterFull);
+        } else {
+          timer = setTimeout(tick, charDelay);
+        }
+      } else if (phase === "hold-full") {
+        i = 0;
+        setTyped("");
+        phase = "hold-empty";
+        timer = setTimeout(tick, holdAfterEmpty);
+      } else {
+        phase = "typing";
+        timer = setTimeout(tick, charDelay);
+      }
+    };
+    timer = setTimeout(tick, charDelay);
+    return () => clearTimeout(timer);
+  }, [speed]);
+
+  return (
+    <span style={{ color, position: "relative", display: "inline-block", whiteSpace: "pre" }}>
+      {/* ghost reserves full width so the SVG to the left doesn't shift while typing */}
+      <span aria-hidden style={{ visibility: "hidden" }}>{text}</span>
+      <span style={{ position: "absolute", inset: 0, display: "inline-flex", alignItems: "center", gap: 2, whiteSpace: "pre" }}>
+        <span>{typed}</span>
         <span
           aria-hidden
+          className="simple-loader-caret"
           style={{
             display: "inline-block",
             width: 2,
             height: "0.9em",
             background: color,
-            animation: "simple-caret 1.06s step-end infinite",
           }}
         />
       </span>
-    );
-  }
-  return <span style={shimmerStyle(color, shimmer.speed, mode)}>{text}</span>;
+    </span>
+  );
 }
 
 // ---------- Per-cell pattern evaluation ----------
@@ -353,30 +501,45 @@ function evalGridPattern(
     return { opacity: 0, scale: 0 };
   }
   if (pattern === "cardio") {
-    // ECG sweep: head moves left-to-right, QRS spike trails behind
-    const sweep = (tick * 0.09 * rate) % (size + 2);
-    const behind = sweep - c; // <0 = ahead of head, 0 = at head, >0 = passed
-    const yAt = (b: number) => {
-      if (b < 0 || b > 3) return null;
-      if (b < 0.5) return -1;          // R peak (up)
-      if (b < 1.3) return 1.3;          // S trough (down)
-      if (b < 2) return -0.3;           // small return
-      return 0;                          // baseline trail
-    };
-    const off = yAt(behind);
+    // ECG sweep: head pulses bright, QRS trace trails behind with thick line and fading tail.
+    const sweep = (tick * 0.1 * rate) % (size + 3);
+    const dx = sweep - c; // >0 = already passed, <0 = ahead of head
     const midR = Math.round(center);
-    if (off === null) {
-      // flat baseline, dim
-      return r === midR ? { opacity: 0.1, scale: 0.35 } : { opacity: 0, scale: 0 };
-    }
-    const targetR = center + off * center * 0.7;
-    const d = Math.abs(r - targetR);
-    const active = d < 0.7;
-    const fade = Math.max(0, 1 - behind / 3);
-    return {
-      opacity: active ? 0.2 + fade * 0.8 : r === midR ? 0.08 : 0,
-      scale: active ? 0.55 + fade * 0.45 : 0.3,
+    const amp = center * 0.95; // full vertical range
+
+    // y-offset of the trace at given "behind" distance (in columns)
+    const qrsAt = (b: number): number | null => {
+      if (b < -0.3 || b > 4) return null;
+      if (b < 0.2) return 0;             // approach: baseline
+      if (b < 0.75) return -amp;          // R peak — shoots to top
+      if (b < 1.5) return amp;            // S trough — shoots to bottom
+      if (b < 2.2) return -amp * 0.35;    // small bounce back
+      return 0;                            // flat trail
     };
+    const off = qrsAt(dx);
+    if (off === null) {
+      return r === midR ? { opacity: 0.06, scale: 0.25 } : { opacity: 0, scale: 0 };
+    }
+    const targetR = center + off;
+    const d = Math.abs(r - targetR);
+    const age = Math.max(0, Math.min(1, dx / 3.5));
+    const fade = 1 - age;
+    const atHead = dx > -0.3 && dx < 0.4;
+
+    // Thicker spike — line is ~2 cells wide; edge cells fall off smoothly.
+    if (d < 1.2) {
+      const edgeT = Math.max(0, 1 - d * 0.9);
+      if (atHead) {
+        // Head flashes bright and slightly enlarged.
+        return { opacity: 0.9 + edgeT * 0.1, scale: 0.95 + edgeT * 0.25 };
+      }
+      return { opacity: 0.25 + fade * 0.7 * edgeT, scale: 0.45 + fade * 0.55 };
+    }
+    // Continuity hint: baseline row stays faintly visible in the trail.
+    if (r === midR) {
+      return { opacity: 0.1 + fade * 0.12, scale: 0.3 };
+    }
+    return { opacity: 0, scale: 0 };
   }
   if (pattern === "waveform") {
     const amp = (Math.sin(tick * 0.18 * rate - c * 0.55) + 1) / 2;
@@ -393,6 +556,175 @@ function evalGridPattern(
     const dist = Math.hypot(r - center, c - center);
     const wave = (Math.sin(tick * 0.15 * rate - dist * 1.4) + 1) / 2;
     return { opacity: 0.15 + wave * 0.85, scale: 0.5 + wave * 0.5 };
+  }
+  // ---------- Physics ----------
+  if (pattern === "bouncing-ball") {
+    const midC = Math.round(center);
+    const t = tick * 0.12 * rate;
+    // |sin| gives bouncing motion: 0 at ground, 1 at apex.
+    const h = Math.abs(Math.sin(t));
+    const ballR = (size - 1) * (1 - h); // row position
+    const d = Math.abs(r - ballR);
+    const onBall = c === midC && d < 0.9;
+    // Squash near ground (h low): widen ball horizontally.
+    const squash = h < 0.15 ? (1 - h / 0.15) : 0;
+    if (r === size - 1 && Math.abs(c - midC) < 1 + squash * 1.5 && squash > 0.1) {
+      return { opacity: 0.4 + squash * 0.6, scale: 0.6 + squash * 0.4 };
+    }
+    if (onBall) return { opacity: 1, scale: 1 };
+    // Faint shadow at ground
+    if (r === size - 1 && c === midC) return { opacity: 0.15, scale: 0.4 };
+    return { opacity: 0, scale: 0 };
+  }
+  if (pattern === "pendulum") {
+    const midR = Math.round(center);
+    const t = tick * 0.1 * rate;
+    const swing = Math.sin(t); // -1..1
+    const ballC = center + swing * center * 0.9;
+    const ballCi = Math.round(ballC);
+    // Small vertical arc — dips lower at endpoints
+    const arcY = Math.abs(swing);
+    const ballR = Math.round(midR + arcY * center * 0.3);
+    if (r === ballR && c === ballCi) return { opacity: 1, scale: 1 };
+    // Pivot string: short vertical line from top-center to ball
+    if (c === Math.round(center) && r < ballR && r <= midR) {
+      return { opacity: 0.12, scale: 0.3 };
+    }
+    return { opacity: 0, scale: 0 };
+  }
+  if (pattern === "elastic-bar") {
+    const midR = Math.round(center);
+    if (r !== midR) return { opacity: 0, scale: 0 };
+    const t = tick * 0.08 * rate;
+    // Use sin^2 for "snap back" feel: quick stretch then slow rest
+    const raw = Math.sin(t);
+    const stretch = raw * raw; // 0..1, squared gives faster return
+    const halfWidth = 0.6 + stretch * center * 0.95;
+    const d = Math.abs(c - center);
+    if (d < halfWidth) {
+      const edgeT = Math.max(0, 1 - d / halfWidth);
+      return { opacity: 0.3 + edgeT * 0.7, scale: 0.6 + edgeT * 0.4 };
+    }
+    return { opacity: 0, scale: 0 };
+  }
+  // ---------- Path ----------
+  if (pattern === "spiral") {
+    // Activate cells in a spiral order: innermost first, winding outward.
+    const cellAngle = Math.atan2(r - center, c - center);
+    const dist = Math.hypot(r - center, c - center);
+    const maxDist = Math.hypot(center, center);
+    // Order = radius + small angular offset; head sweeps through this linearly.
+    const orderIdx = dist + (cellAngle + Math.PI) / (Math.PI * 2) * 0.7;
+    const totalOrder = maxDist + 0.7;
+    const head = (tick * 0.06 * rate) % (totalOrder * 1.4);
+    const diff = head - orderIdx;
+    if (diff < 0 || diff > totalOrder * 1.1) return { opacity: 0.05, scale: 0.25 };
+    const fade = 1 - Math.min(1, diff / (totalOrder * 0.7));
+    return { opacity: 0.15 + fade * 0.85, scale: 0.4 + fade * 0.6 };
+  }
+  if (pattern === "snake") {
+    // Perimeter cells traversed clockwise from top-left. Snake has a head + 3-cell tail.
+    const perim: [number, number][] = [];
+    for (let cc = 0; cc < size; cc++) perim.push([0, cc]);
+    for (let rr = 1; rr < size; rr++) perim.push([rr, size - 1]);
+    for (let cc = size - 2; cc >= 0; cc--) perim.push([size - 1, cc]);
+    for (let rr = size - 2; rr > 0; rr--) perim.push([rr, 0]);
+    const pLen = perim.length;
+    const head = Math.floor(tick * 0.2 * rate) % pLen;
+    const tailLen = 4;
+    for (let k = 0; k < tailLen; k++) {
+      const idx = ((head - k) % pLen + pLen) % pLen;
+      if (perim[idx][0] === r && perim[idx][1] === c) {
+        const t = 1 - k / tailLen;
+        return { opacity: 0.25 + t * 0.75, scale: 0.55 + t * 0.45 };
+      }
+    }
+    return { opacity: 0.04, scale: 0.2 };
+  }
+  if (pattern === "checker") {
+    const t = tick * 0.04 * rate;
+    const phase = (Math.sin(t) + 1) / 2; // 0..1
+    const parity = (r + c) % 2;
+    const v = parity === 0 ? phase : 1 - phase;
+    return { opacity: 0.15 + v * 0.85, scale: 0.45 + v * 0.55 };
+  }
+  // ---------- Natural ----------
+  if (pattern === "flame") {
+    // Higher rows dimmer; add per-cell flicker so the top shimmers.
+    const t = tick * 0.18 * rate;
+    const basePart = Math.max(0, 1 - r / (size - 0.2));
+    const flick = 0.55 + Math.sin(t + c * 2.3 + r * 1.7) * 0.35 + Math.sin(t * 2.1 + c * 1.1) * 0.15;
+    const intensity = basePart * Math.max(0.15, flick) * 1.4;
+    const v = Math.max(0, Math.min(1, intensity));
+    if (v < 0.08) return { opacity: 0.05, scale: 0.2 };
+    return { opacity: 0.15 + v * 0.85, scale: 0.4 + v * 0.6 };
+  }
+  if (pattern === "rain") {
+    // Per-column independent drops, varying speed + phase so columns aren't synced.
+    const t = tick * 0.22 * rate;
+    const colHash = ((c * 2654435761) >>> 0) / 4294967295; // 0..1
+    const speed = 0.7 + colHash * 0.8;
+    const offset = colHash * size * 2;
+    const dropY = ((t * speed + offset) % (size + 3)) - 1;
+    const d = r - dropY; // positive if above drop
+    if (d >= 0 && d < 3) {
+      const brightness = 1 - d / 3;
+      return { opacity: 0.25 + brightness * 0.75, scale: 0.5 + brightness * 0.5 };
+    }
+    return { opacity: 0.04, scale: 0.2 };
+  }
+  if (pattern === "breath") {
+    // Whole grid pulses in coordinated slow breath, with slight radial phase for depth.
+    const t = tick * 0.05 * rate;
+    const dist = Math.hypot(r - center, c - center);
+    const phase = t - dist * 0.25;
+    const raw = (Math.sin(phase) + 1) / 2;
+    const eased = raw * raw * (3 - 2 * raw);
+    return { opacity: 0.3 + eased * 0.7, scale: 0.5 + eased * 0.5 };
+  }
+  // ---------- Tech ----------
+  if (pattern === "progress-bar") {
+    const midR = Math.round(center);
+    const t = tick * 0.08 * rate;
+    const cycle = t % 2; // 0..2
+    const dir = cycle < 1 ? cycle : 2 - cycle; // 0..1 triangle
+    const barWidth = size * 0.45;
+    const barCenter = dir * (size - barWidth) + barWidth / 2;
+    const d = Math.abs(c - barCenter);
+    if (r !== midR) {
+      // Rail on neighbor rows
+      if (Math.abs(r - midR) === 1) return { opacity: 0.06, scale: 0.2 };
+      return { opacity: 0, scale: 0 };
+    }
+    if (d < barWidth / 2) {
+      const edgeT = Math.max(0, 1 - d / (barWidth / 2));
+      return { opacity: 0.4 + edgeT * 0.6, scale: 0.7 + edgeT * 0.3 };
+    }
+    return { opacity: 0.1, scale: 0.3 }; // dim rail
+  }
+  if (pattern === "scan-line") {
+    const t = tick * 0.14 * rate;
+    const sweep = t % (size + 2);
+    const d = Math.abs(c - sweep);
+    if (d < 0.6) return { opacity: 1, scale: 0.95 };
+    if (d < 1.8) return { opacity: 0.15 + (1.8 - d) * 0.45, scale: 0.4 + (1.8 - d) * 0.25 };
+    return { opacity: 0.04, scale: 0.2 };
+  }
+  if (pattern === "matrix-rain") {
+    // Per-column vertical trails like The Matrix — head bright, trail fades behind.
+    const t = tick * 0.18 * rate;
+    const colHash = ((c * 2654435761) >>> 0) / 4294967295;
+    const speed = 0.6 + colHash * 0.7;
+    const offset = colHash * size * 3;
+    const head = ((t * speed + offset) % (size + 4)) - 1;
+    const d = head - r; // positive = r is above head (trail)
+    if (d < -0.5) return { opacity: 0.03, scale: 0.15 };
+    if (d < 0.5) return { opacity: 1, scale: 0.95 }; // bright head
+    if (d < 4) {
+      const fade = 1 - d / 4;
+      return { opacity: 0.1 + fade * 0.6, scale: 0.4 + fade * 0.4 };
+    }
+    return { opacity: 0.03, scale: 0.15 };
   }
   if (pattern === "noise") {
     // Smooth noise: hash at two consecutive seeds and interpolate, so each cell
@@ -479,11 +811,14 @@ interface StepArgs {
   style: AnimStyle;
   bg: BgStyle;
   size: number;
+  area: number;
+  pad: number;
   colors: LoaderColors;
   cellShape: CellShape;
   gridCells: { cells: GridCell[]; cellSize: number };
   scatterState: ScatterCell[];
   scatterBound: number;
+  constellationState: ConstellationNode[];
   refs: {
     shapes: (SVGGraphicsElement | null)[];
     edges: (SVGLineElement | null)[];
@@ -494,11 +829,59 @@ function stepPattern(args: StepArgs) {
   const { pattern, tick, fps, colors, refs } = args;
 
   if (pattern === "node-graph") {
-    const { nodes, edges } = stepNodeGraph(tick);
+    const { nodes, edges } = stepNodeGraph(tick, args.area);
     nodes.forEach((n, i) => {
       const el = refs.shapes[i];
       if (!el) return;
-      el.style.transform = `scale(${n.scale})`;
+      el.setAttribute("transform", `translate(${args.pad + n.x} ${args.pad + n.y}) scale(${n.scale})`);
+      el.style.opacity = String(n.opacity);
+      el.style.fill = colors.primary;
+    });
+    // Update edge endpoints to follow the current node positions.
+    NODE_EDGES.forEach(([a, b], i) => {
+      const el = refs.edges[i];
+      if (!el) return;
+      el.setAttribute("x1", String(args.pad + nodes[a].x));
+      el.setAttribute("y1", String(args.pad + nodes[a].y));
+      el.setAttribute("x2", String(args.pad + nodes[b].x));
+      el.setAttribute("y2", String(args.pad + nodes[b].y));
+      el.style.stroke = colors.primary;
+      el.style.strokeOpacity = String(edges[i]);
+    });
+    return;
+  }
+  if (pattern === "constellation") {
+    const { positions, edges } = stepConstellation(args.constellationState, args.area);
+    positions.forEach((p, i) => {
+      const el = refs.shapes[i];
+      if (!el) return;
+      el.setAttribute("transform", `translate(${args.pad + p.x} ${args.pad + p.y})`);
+      el.style.opacity = "0.95";
+      el.style.fill = colors.primary;
+    });
+    edges.forEach((e, i) => {
+      const el = refs.edges[i];
+      if (!el) return;
+      const a = positions[e.a];
+      const b = positions[e.b];
+      el.setAttribute("x1", String(args.pad + a.x));
+      el.setAttribute("y1", String(args.pad + a.y));
+      el.setAttribute("x2", String(args.pad + b.x));
+      el.setAttribute("y2", String(args.pad + b.y));
+      el.style.stroke = colors.primary;
+      el.style.strokeOpacity = String(e.alpha);
+    });
+    return;
+  }
+  if (pattern === "network-pulse") {
+    const { nodes, edges } = stepNetworkPulse(tick);
+    const pts = pulseNodePositions(args.area);
+    nodes.forEach((n, i) => {
+      const el = refs.shapes[i];
+      if (!el) return;
+      const cx = args.pad + pts[i].x;
+      const cy = args.pad + pts[i].y;
+      el.setAttribute("transform", `translate(${cx} ${cy}) scale(${n.scale})`);
       el.style.opacity = String(n.opacity);
       el.style.fill = colors.primary;
     });
@@ -507,6 +890,34 @@ function stepPattern(args: StepArgs) {
       if (!el) return;
       el.style.stroke = colors.primary;
       el.style.strokeOpacity = String(alpha);
+    });
+    return;
+  }
+  if (pattern === "molecular") {
+    const { center, satellites } = stepMolecular(tick, args.area);
+    const centerEl = refs.shapes[0];
+    if (centerEl) {
+      centerEl.setAttribute("transform", `translate(${args.pad + center.x} ${args.pad + center.y}) scale(${center.scale})`);
+      centerEl.style.opacity = String(center.opacity);
+      centerEl.style.fill = colors.primary;
+    }
+    satellites.forEach((s, i) => {
+      const el = refs.shapes[i + 1];
+      if (!el) return;
+      el.setAttribute("transform", `translate(${args.pad + s.x} ${args.pad + s.y}) scale(${s.scale})`);
+      el.style.opacity = String(s.opacity);
+      el.style.fill = colors.primary;
+    });
+    // Bonds from center to each satellite
+    satellites.forEach((s, i) => {
+      const el = refs.edges[i];
+      if (!el) return;
+      el.setAttribute("x1", String(args.pad + center.x));
+      el.setAttribute("y1", String(args.pad + center.y));
+      el.setAttribute("x2", String(args.pad + s.x));
+      el.setAttribute("y2", String(args.pad + s.y));
+      el.style.stroke = colors.primary;
+      el.style.strokeOpacity = String(0.4 + s.opacity * 0.5);
     });
     return;
   }
@@ -535,8 +946,19 @@ function stepPattern(args: StepArgs) {
       out = { opacity: s.opacity, scale: s.scale, color: s.fill };
     } else {
       out = evalGridPattern(pattern, cell.r, cell.c, args.size, tick, fps, t, colors.primary, colors.inactiveCells);
+      // Breathe: lift the opacity floor of low-activity cells with a slow sine
+      // so inactive cells feel alive even on the new patterns.
+      if (args.bg === "breathe" && out.opacity < 0.3) {
+        const breatheFloor = 0.15 + Math.sin(tick * 0.03) * 0.05;
+        out.opacity = Math.max(out.opacity, breatheFloor);
+      }
     }
-    el.style.transform = `scale(${out.scale})`;
+    // iOS Safari mis-renders CSS-transformed ancestors + SVG `transform`
+    // attributes on descendants. Drive size with concrete geometry attrs
+    // instead of transforms — works on every SVG renderer.
+    const baseSize = args.gridCells.cellSize;
+    const drawn = baseSize * out.scale;
+    writeCellGeometry(el, args.cellShape, cell.cx, cell.cy, drawn);
     el.style.opacity = String(out.opacity);
     // For patterns that don't set their own color, blend inactive → primary by activity
     // so the inactiveCells color actually shows on dim/off cells.
@@ -544,16 +966,69 @@ function stepPattern(args: StepArgs) {
   });
 }
 
+// ---------- Cell geometry writer (iOS-safe, no transforms) ----------
+
+function writeCellGeometry(
+  el: SVGGraphicsElement,
+  shape: CellShape,
+  cx: number,
+  cy: number,
+  size: number,
+) {
+  const r = size / 2;
+  if (el instanceof SVGCircleElement) {
+    el.setAttribute("cx", String(cx));
+    el.setAttribute("cy", String(cy));
+    el.setAttribute("r", String(r));
+    return;
+  }
+  if (el instanceof SVGRectElement) {
+    el.setAttribute("x", String(cx - r));
+    el.setAttribute("y", String(cy - r));
+    el.setAttribute("width", String(size));
+    el.setAttribute("height", String(size));
+    if (shape === "rounded-rect") el.setAttribute("rx", String(size * 0.25));
+    return;
+  }
+  if (el instanceof SVGPolygonElement) {
+    el.setAttribute("points", polyPointsFor(shape, cx, cy, size));
+    return;
+  }
+}
+
+function polyPointsFor(shape: CellShape, cx: number, cy: number, size: number): string {
+  const r = size / 2;
+  if (shape === "diamond") {
+    return `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`;
+  }
+  if (shape === "hexagon") {
+    const pts: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const a = (Math.PI / 3) * i + Math.PI / 6;
+      pts.push(`${cx + Math.cos(a) * r},${cy + Math.sin(a) * r}`);
+    }
+    return pts.join(" ");
+  }
+  // star
+  const pts: string[] = [];
+  for (let i = 0; i < 10; i++) {
+    const a = (Math.PI / 5) * i - Math.PI / 2;
+    const rr = i % 2 === 0 ? r : r * 0.45;
+    pts.push(`${cx + Math.cos(a) * rr},${cy + Math.sin(a) * rr}`);
+  }
+  return pts.join(" ");
+}
+
 // ---------- Text effects (shimmer / shine) ----------
 
 function ensureTextFxKeyframes() {
   if (typeof document === "undefined") return;
-  if (document.getElementById("simple-loader-text-fx-v2")) return;
-  // Remove any older version.
-  const old = document.getElementById("simple-loader-text-fx");
-  if (old) old.remove();
+  if (document.getElementById("simple-loader-text-fx-v3")) return;
+  // Remove any older versions.
+  document.getElementById("simple-loader-text-fx")?.remove();
+  document.getElementById("simple-loader-text-fx-v2")?.remove();
   const el = document.createElement("style");
-  el.id = "simple-loader-text-fx-v2";
+  el.id = "simple-loader-text-fx-v3";
   el.textContent = `
     @keyframes simple-shimmer {
       0% { background-position: 0% 0; }
@@ -563,9 +1038,12 @@ function ensureTextFxKeyframes() {
       0% { background-position: 100% 0; }
       60%, 100% { background-position: 0% 0; }
     }
-    @keyframes simple-caret {
+    @keyframes simple-caret-blink {
       0%, 49% { opacity: 1; }
       50%, 100% { opacity: 0; }
+    }
+    .simple-loader-caret {
+      animation: simple-caret-blink 1.06s step-end infinite;
     }
   `;
   document.head.appendChild(el);

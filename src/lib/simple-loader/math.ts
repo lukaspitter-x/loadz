@@ -12,7 +12,7 @@ export function globalT(tick: number, fps: number): number {
 }
 
 export function gridPhaseT(
-  pattern: AnimPattern,
+  pattern: string,
   r: number,
   c: number,
   size: number,
@@ -133,17 +133,151 @@ export const NODE_EDGES: [number, number][] = [
   [2, 3],
 ];
 
-export function stepNodeGraph(tick: number): {
-  nodes: { scale: number; opacity: number }[];
+export function stepNodeGraph(
+  tick: number,
+  area: number,
+): {
+  nodes: { x: number; y: number; scale: number; opacity: number }[];
   edges: number[];
 } {
   const t = tick * 0.04;
-  const nodes = NODE_POSITIONS.map((_, i) => {
+  // Small elliptical drift around each base position; ~6% of the area.
+  const driftA = area * 0.05;
+  const driftB = area * 0.07;
+  const nodes = NODE_POSITIONS.map(([bx, by], i) => {
+    const base = { x: bx * area, y: by * area };
+    const ph = t * 0.8 + i * 1.3;
+    const x = base.x + Math.cos(ph) * driftA;
+    const y = base.y + Math.sin(ph * 0.7 + i * 0.5) * driftB;
     const pulse = (Math.sin(t - i * 0.5) + 1) / 2;
-    return { scale: 0.7 + pulse * 0.6, opacity: 0.5 + pulse * 0.5 };
+    return { x, y, scale: 0.7 + pulse * 0.6, opacity: 0.5 + pulse * 0.5 };
   });
   const edges = NODE_EDGES.map(
     (_, i) => 0.15 + ((Math.sin(t * 1.4 - i * 0.9) + 1) / 2) * 0.7,
   );
   return { nodes, edges };
+}
+
+// ---------- Constellation ----------
+// N free-moving nodes with velocity + wall bounce; edges drawn between pairs
+// within a proximity threshold, alpha fades with distance.
+
+export interface ConstellationNode {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+}
+
+export const CONSTELLATION_COUNT = 6;
+
+export function makeConstellation(area: number): ConstellationNode[] {
+  const out: ConstellationNode[] = [];
+  for (let i = 0; i < CONSTELLATION_COUNT; i++) {
+    out.push({
+      x: Math.random() * area,
+      y: Math.random() * area,
+      vx: (Math.random() - 0.5) * area * 0.04,
+      vy: (Math.random() - 0.5) * area * 0.04,
+    });
+  }
+  return out;
+}
+
+export function stepConstellation(
+  nodes: ConstellationNode[],
+  area: number,
+): {
+  positions: { x: number; y: number }[];
+  edges: { a: number; b: number; alpha: number }[];
+} {
+  nodes.forEach((n) => {
+    n.x += n.vx;
+    n.y += n.vy;
+    if (n.x < 0 || n.x > area) { n.vx = -n.vx; n.x = Math.max(0, Math.min(area, n.x)); }
+    if (n.y < 0 || n.y > area) { n.vy = -n.vy; n.y = Math.max(0, Math.min(area, n.y)); }
+  });
+  const threshold = area * 0.55;
+  const edges: { a: number; b: number; alpha: number }[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const d = Math.hypot(nodes[i].x - nodes[j].x, nodes[i].y - nodes[j].y);
+      const alpha = d < threshold ? Math.pow(1 - d / threshold, 1.3) : 0;
+      edges.push({ a: i, b: j, alpha });
+    }
+  }
+  return { positions: nodes.map((n) => ({ x: n.x, y: n.y })), edges };
+}
+
+// ---------- Network Pulse ----------
+// Nodes on a ring; a "signal packet" travels around the ring, lighting up nodes
+// and edges as it passes.
+
+export const PULSE_NODE_COUNT = 8;
+
+export function pulseNodePositions(area: number): { x: number; y: number }[] {
+  const cx = area / 2;
+  const cy = area / 2;
+  const r = area * 0.42;
+  const out = [];
+  for (let i = 0; i < PULSE_NODE_COUNT; i++) {
+    const a = (i / PULSE_NODE_COUNT) * Math.PI * 2 - Math.PI / 2;
+    out.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
+  }
+  return out;
+}
+
+export function stepNetworkPulse(tick: number): {
+  nodes: { scale: number; opacity: number }[];
+  edges: number[]; // alpha for each consecutive-pair edge (N edges, closing ring)
+} {
+  const count = PULSE_NODE_COUNT;
+  const packet = (tick * 0.06) % count; // float position along ring
+  const nodes = [];
+  for (let i = 0; i < count; i++) {
+    // Distance around ring (shortest direction)
+    const diff = Math.abs(((packet - i + count / 2) % count) - count / 2);
+    const nearness = Math.max(0, 1 - diff / 1.4);
+    nodes.push({ scale: 0.6 + nearness * 0.6, opacity: 0.25 + nearness * 0.75 });
+  }
+  const edges = [];
+  for (let i = 0; i < count; i++) {
+    // Edge between i and (i+1) — active when packet is between them.
+    const mid = i + 0.5;
+    const diff = Math.abs(((packet - mid + count / 2) % count) - count / 2);
+    const alpha = Math.max(0, 1 - diff / 0.8);
+    edges.push(0.1 + alpha * 0.9);
+  }
+  return { nodes, edges };
+}
+
+// ---------- Molecular ----------
+// One central node + orbiting satellites at different radii / speeds.
+// Bonds (lines) stay connected from center to each satellite.
+
+export const MOLECULAR_SATELLITES = 3;
+
+export function stepMolecular(tick: number, area: number): {
+  center: { x: number; y: number; scale: number; opacity: number };
+  satellites: { x: number; y: number; scale: number; opacity: number }[];
+} {
+  const cx = area / 2;
+  const cy = area / 2;
+  const t = tick * 0.05;
+  const radii = [area * 0.2, area * 0.33, area * 0.45];
+  const speeds = [1.1, -0.75, 0.5];
+  const phases = [0, 2.1, 4.3];
+  const satellites = [];
+  for (let i = 0; i < MOLECULAR_SATELLITES; i++) {
+    const a = t * speeds[i] + phases[i];
+    const x = cx + Math.cos(a) * radii[i];
+    const y = cy + Math.sin(a) * radii[i];
+    const pulse = (Math.sin(t * 1.3 - i * 0.9) + 1) / 2;
+    satellites.push({ x, y, scale: 0.7 + pulse * 0.4, opacity: 0.55 + pulse * 0.45 });
+  }
+  const centerPulse = (Math.sin(t * 2) + 1) / 2;
+  return {
+    center: { x: cx, y: cy, scale: 0.85 + centerPulse * 0.25, opacity: 0.7 + centerPulse * 0.3 },
+    satellites,
+  };
 }

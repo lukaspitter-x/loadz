@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <rect width="32" height="32" rx="6" fill="#050010"/>
+  <g fill="#FF2DAA">
+    <!-- 5x5 pixel grid, 4px cells, 1px gap, 3px padding -->
+    <!-- Brightness varies along diagonal for a "wave-diagonal" frozen frame. -->
+    <rect x="3"  y="3"  width="4" height="4" rx="1" opacity="0.22"/>
+    <rect x="8"  y="3"  width="4" height="4" rx="1" opacity="0.36"/>
+    <rect x="13" y="3"  width="4" height="4" rx="1" opacity="0.56"/>
+    <rect x="18" y="3"  width="4" height="4" rx="1" opacity="0.78"/>
+    <rect x="23" y="3"  width="4" height="4" rx="1" opacity="0.94"/>
+
+    <rect x="3"  y="8"  width="4" height="4" rx="1" opacity="0.36"/>
+    <rect x="8"  y="8"  width="4" height="4" rx="1" opacity="0.56"/>
+    <rect x="13" y="8"  width="4" height="4" rx="1" opacity="0.78"/>
+    <rect x="18" y="8"  width="4" height="4" rx="1" opacity="0.94"/>
+    <rect x="23" y="8"  width="4" height="4" rx="1" opacity="1"/>
+
+    <rect x="3"  y="13" width="4" height="4" rx="1" opacity="0.56"/>
+    <rect x="8"  y="13" width="4" height="4" rx="1" opacity="0.78"/>
+    <rect x="13" y="13" width="4" height="4" rx="1" opacity="0.94"/>
+    <rect x="18" y="13" width="4" height="4" rx="1" opacity="1"/>
+    <rect x="23" y="13" width="4" height="4" rx="1" opacity="0.94"/>
+
+    <rect x="3"  y="18" width="4" height="4" rx="1" opacity="0.78"/>
+    <rect x="8"  y="18" width="4" height="4" rx="1" opacity="0.94"/>
+    <rect x="13" y="18" width="4" height="4" rx="1" opacity="1"/>
+    <rect x="18" y="18" width="4" height="4" rx="1" opacity="0.94"/>
+    <rect x="23" y="18" width="4" height="4" rx="1" opacity="0.78"/>
+
+    <rect x="3"  y="23" width="4" height="4" rx="1" opacity="0.94"/>
+    <rect x="8"  y="23" width="4" height="4" rx="1" opacity="1"/>
+    <rect x="13" y="23" width="4" height="4" rx="1" opacity="0.94"/>
+    <rect x="18" y="23" width="4" height="4" rx="1" opacity="0.78"/>
+    <rect x="23" y="23" width="4" height="4" rx="1" opacity="0.56"/>
+  </g>
+</svg>

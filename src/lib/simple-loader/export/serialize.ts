@@ -4,6 +4,8 @@ import { REACT_TEMPLATE, CONFIG_MARKER } from "./react-template";
 
 export interface PortableConfig {
   displayText: string;
+  size: number;
+  padding: number;
   grid: { size: number };
   cellShape: CellShape;
   cellSizeFactor: number;
@@ -28,6 +30,8 @@ interface Instance {
   shape: CellShape;
   bg: BgStyle;
   fps: number;
+  size: number;
+  padding: number;
   gridSize: number;
   cellSizeFactor: number;
   colors: LoaderColors;
@@ -39,6 +43,8 @@ interface Instance {
 export function instanceToConfig(inst: Instance): PortableConfig {
   return {
     displayText: inst.displayText,
+    size: inst.size,
+    padding: inst.padding,
     grid: { size: inst.gridSize },
     cellShape: inst.shape,
     cellSizeFactor: inst.cellSizeFactor,
