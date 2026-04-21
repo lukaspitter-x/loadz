@@ -9,7 +9,7 @@ export const REACT_TEMPLATE = `// SimpleLoader — generated from loader-builder
 // Paste into your project (e.g. components/SimpleLoader.tsx) and import <SimpleLoader />.
 "use client";
 
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 // ---------- Types ----------
 
@@ -1114,7 +1114,6 @@ export function SimpleLoader({
 }: Partial<SimpleLoaderProps> = {}) {
   const anim = animation!;
   const { pattern } = anim;
-  const glowId = \`glow-\${useId().replace(/:/g, "")}\`;
   const SIZE = Math.max(4, sizeProp);
   const PAD = Math.max(0, Math.min(paddingProp, Math.floor((SIZE - 2) / 2)));
   const AREA = SIZE - PAD * 2;
@@ -1125,6 +1124,13 @@ export function SimpleLoader({
   const nodeSize = 3 * s;
   const edgeStroke = 0.3 * s;
   const bgRadius = (SIZE / 12) * 2;
+
+  const glowCss = (() => {
+    if (!glow?.enabled) return undefined;
+    const blurPx = glow.size * s;
+    const stack = Math.max(1, Math.round(glow.intensity));
+    return Array(stack).fill(\`drop-shadow(0 0 \${blurPx}px \${colors!.primary})\`).join(" ");
+  })();
   const isStatus = pattern === "success" || pattern === "error" || pattern === "warning";
   const effectiveSize = isStatus ? 5 : grid!.size;
 
@@ -1234,23 +1240,10 @@ export function SimpleLoader({
           flexShrink: 0,
           display: "block",
           transition: "background 250ms ease",
+          filter: glowCss,
         }}
       >
-        {glow?.enabled && (
-          <defs>
-            <filter id={glowId} x="-50%" y="-50%" width="200%" height="200%">
-              <feGaussianBlur stdDeviation={glow.size * s} result="blur" />
-              <feComponentTransfer in="blur" result="boosted">
-                <feFuncA type="linear" slope={glow.intensity} />
-              </feComponentTransfer>
-              <feMerge>
-                <feMergeNode in="boosted" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
-          </defs>
-        )}
-        <g filter={glow?.enabled ? \`url(#\${glowId})\` : undefined}>
+        <g>
           {pattern === "node-graph" && (
             <>
               {NODE_EDGES.map((_, i) => (

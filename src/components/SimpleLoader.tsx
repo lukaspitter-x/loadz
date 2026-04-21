@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AnimStyle, BgStyle, CellShape, LoaderColors } from "@/lib/types";
 import {
   CONSTELLATION_COUNT,
@@ -88,7 +88,6 @@ export function SimpleLoader({
   displayPx,
 }: SimpleLoaderProps) {
   const { pattern } = animation;
-  const glowId = `glow-${useId().replace(/:/g, "")}`;
   // Clamp geometry so AREA stays positive.
   const SIZE = Math.max(4, sizeProp);
   const PAD = Math.max(0, Math.min(paddingProp, Math.floor((SIZE - 2) / 2)));
@@ -101,6 +100,17 @@ export function SimpleLoader({
   const nodeSize = 3 * s;
   const edgeStroke = 0.3 * s;
   const bgRadius = (SIZE / 12) * 2;
+
+  // CSS `filter: drop-shadow(...)` replaces the old SVG <filter> which iOS
+  // mis-clips when the viewBox is scaled to `displayPx`. Drop-shadows stack
+  // to approximate the old feComponentTransfer alpha boost.
+  const glowCss = (() => {
+    if (!glow?.enabled) return undefined;
+    const scaleFactor = (displayPx ?? SIZE) / SIZE;
+    const blurPx = glow.size * s * scaleFactor;
+    const stack = Math.max(1, Math.round(glow.intensity));
+    return Array(stack).fill(`drop-shadow(0 0 ${blurPx}px ${colors.primary})`).join(" ");
+  })();
 
   // Status-glyph patterns always render on a 5×5 grid so the pixel glyphs read correctly.
   const isStatus = pattern === "success" || pattern === "error" || pattern === "warning";
@@ -215,8 +225,8 @@ export function SimpleLoader({
       }}
     >
       <svg
-        width={SIZE}
-        height={SIZE}
+        width={displayPx ?? SIZE}
+        height={displayPx ?? SIZE}
         viewBox={`0 0 ${SIZE} ${SIZE}`}
         data-loader-id={dataId}
         style={{
@@ -227,23 +237,17 @@ export function SimpleLoader({
           transition: "background 250ms ease",
           width: displayPx,
           height: displayPx,
+          // CSS filter on the SVG itself wraps the raster output — reliable on
+          // iOS and sidesteps the SVG-filter region miscomputation.
+          filter: glowCss,
+          // The drop-shadow includes the SVG's own background rect, which
+          // produces an undesirable glowing halo around the entire card.
+          // But since background is a CSS property (not SVG content), it is
+          // NOT included by drop-shadow — only SVG-drawn content is. So this
+          // is exactly what we want: glow around the cells only.
         }}
       >
-        {glow?.enabled && (
-          <defs>
-            <filter id={glowId} x="-50%" y="-50%" width="200%" height="200%">
-              <feGaussianBlur stdDeviation={glow.size * s} result="blur" />
-              <feComponentTransfer in="blur" result="boosted">
-                <feFuncA type="linear" slope={glow.intensity} />
-              </feComponentTransfer>
-              <feMerge>
-                <feMergeNode in="boosted" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
-          </defs>
-        )}
-        <g filter={glow?.enabled ? `url(#${glowId})` : undefined}>
+        <g>
           {pattern === "node-graph" && (
             <>
               {NODE_EDGES.map((_, i) => (
