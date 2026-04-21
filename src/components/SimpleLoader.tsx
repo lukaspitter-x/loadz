@@ -214,6 +214,9 @@ export function SimpleLoader({
     pattern === "network-pulse" ||
     pattern === "molecular";
 
+  const outerPx = displayPx ?? SIZE;
+  const outerRadius = displayPx ? (displayPx / SIZE) * bgRadius : bgRadius;
+
   return (
     <span
       style={{
@@ -224,27 +227,28 @@ export function SimpleLoader({
         color: colors.text,
       }}
     >
+      <span
+        style={{
+          display: "inline-block",
+          width: outerPx,
+          height: outerPx,
+          flexShrink: 0,
+          background: transparentBg ? "transparent" : colors.background,
+          borderRadius: outerRadius,
+          transition: "background 250ms ease",
+          lineHeight: 0,
+        }}
+      >
       <svg
-        width={displayPx ?? SIZE}
-        height={displayPx ?? SIZE}
+        width={outerPx}
+        height={outerPx}
         viewBox={`0 0 ${SIZE} ${SIZE}`}
         data-loader-id={dataId}
         style={{
-          background: transparentBg ? "transparent" : colors.background,
-          borderRadius: displayPx ? (displayPx / SIZE) * bgRadius : bgRadius,
-          flexShrink: 0,
           display: "block",
-          transition: "background 250ms ease",
-          width: displayPx,
-          height: displayPx,
-          // CSS filter on the SVG itself wraps the raster output — reliable on
-          // iOS and sidesteps the SVG-filter region miscomputation.
+          // drop-shadow applied to the transparent SVG so only the drawn
+          // cells contribute to the glow — not the outer background rect.
           filter: glowCss,
-          // The drop-shadow includes the SVG's own background rect, which
-          // produces an undesirable glowing halo around the entire card.
-          // But since background is a CSS property (not SVG content), it is
-          // NOT included by drop-shadow — only SVG-drawn content is. So this
-          // is exactly what we want: glow around the cells only.
         }}
       >
         <g>
@@ -348,6 +352,7 @@ export function SimpleLoader({
             ))}
         </g>
       </svg>
+      </span>
       {displayText && (
         <TextLabel
           text={displayText}

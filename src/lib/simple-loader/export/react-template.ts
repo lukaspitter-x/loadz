@@ -1230,16 +1230,24 @@ export function SimpleLoader({
         color: colors!.text,
       }}
     >
+      <span
+        style={{
+          display: "inline-block",
+          width: SIZE,
+          height: SIZE,
+          flexShrink: 0,
+          background: transparentBg ? "transparent" : colors!.background,
+          borderRadius: bgRadius,
+          transition: "background 250ms ease",
+          lineHeight: 0,
+        }}
+      >
       <svg
         width={SIZE}
         height={SIZE}
         viewBox={\`0 0 \${SIZE} \${SIZE}\`}
         style={{
-          background: transparentBg ? "transparent" : colors!.background,
-          borderRadius: bgRadius,
-          flexShrink: 0,
           display: "block",
-          transition: "background 250ms ease",
           filter: glowCss,
         }}
       >
@@ -1346,6 +1354,7 @@ export function SimpleLoader({
             ))}
         </g>
       </svg>
+      </span>
       {displayText && (
         <TextLabel text={displayText} color={colors!.text} shimmer={shimmer} />
       )}
