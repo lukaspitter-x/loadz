@@ -1,0 +1,14 @@
+{
+  "name": "loader-builder",
+  "account_id": "d38beb68e6a321eae3082cdca6fafbb2",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-04-07",
+  "compatibility_flags": ["nodejs_compat"],
+  "limits": {
+    "cpu_ms": 300000
+  },
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  }
+}

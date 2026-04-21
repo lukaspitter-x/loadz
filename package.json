@@ -5,10 +5,14 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "build:cf": "npx @opennextjs/cloudflare build",
+    "preview:cf": "npx @opennextjs/cloudflare dev",
+    "deploy:cf": "npx @opennextjs/cloudflare deploy"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.0",
+    "@opennextjs/cloudflare": "^1.19.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.8.0",
