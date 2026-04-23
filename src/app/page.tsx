@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Check, ChevronLeft, ChevronRight, Download, Eye, EyeOff, Pause, Play, Plus, Trash2, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, ChevronLeft, ChevronRight, Download, Eye, Pause, Play, Plus, Trash2, X } from "lucide-react";
 import { HexColorPicker } from "react-colorful";
 import { SimpleLoader } from "@/components/SimpleLoader";
 import { ExportModal } from "@/components/ExportModal";
@@ -90,6 +90,14 @@ function makeInstance(overrides: Partial<Instance> & { id?: string } = {}): Inst
 }
 
 const STORAGE_KEY = "simple-loader-sandbox-v1";
+
+type PreviewMode = "default" | "large-off" | "original-only" | "large-only";
+const PREVIEW_MODE_LABELS: Record<PreviewMode, string> = {
+  "default": "Default",
+  "large-off": "Large off",
+  "original-only": "Original only",
+  "large-only": "Large only",
+};
 
 // ---------- Random beautiful config ----------
 
@@ -487,7 +495,12 @@ export default function Sandbox() {
   const [expandedFxColor, setExpandedFxColor] = useState<"base" | "highlight" | "stop0" | "stop1" | "stop2" | null>(null);
   const [exportInstanceId, setExportInstanceId] = useState<string | null>(null);
   const exportInstance = instances.find((i) => i.id === exportInstanceId) ?? null;
-  const [showPreview, setShowPreview] = useState<boolean>(true);
+  const [previewMode, setPreviewMode] = useState<PreviewMode>("default");
+  const [previewMenuOpen, setPreviewMenuOpen] = useState(false);
+  const previewMenuRef = useRef<HTMLDivElement | null>(null);
+  const showLarge = previewMode === "default" || previewMode === "large-only";
+  const showOriginal = previewMode === "default" || previewMode === "large-off" || previewMode === "original-only";
+  const showChrome = previewMode === "default" || previewMode === "large-off";
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [isMobile, setIsMobile] = useState<boolean>(false);
   useEffect(() => {
@@ -515,12 +528,29 @@ export default function Sandbox() {
     return () => cancelAnimationFrame(raf);
   }, [selectedId, settingsOpen]);
   useEffect(() => {
-    const v = window.localStorage.getItem("simple-loader-show-preview");
-    if (v !== null) setShowPreview(v === "1");
+    const v = window.localStorage.getItem("simple-loader-preview-mode");
+    if (v === "default" || v === "large-off" || v === "original-only" || v === "large-only") {
+      setPreviewMode(v);
+      return;
+    }
+    // migrate old boolean key
+    const legacy = window.localStorage.getItem("simple-loader-show-preview");
+    if (legacy !== null) {
+      setPreviewMode(legacy === "1" ? "default" : "large-off");
+      window.localStorage.removeItem("simple-loader-show-preview");
+    }
   }, []);
   useEffect(() => {
-    window.localStorage.setItem("simple-loader-show-preview", showPreview ? "1" : "0");
-  }, [showPreview]);
+    window.localStorage.setItem("simple-loader-preview-mode", previewMode);
+  }, [previewMode]);
+  useEffect(() => {
+    if (!previewMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!previewMenuRef.current?.contains(e.target as Node)) setPreviewMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [previewMenuOpen]);
 
   const [confirmingClear, setConfirmingClear] = useState(false);
   useEffect(() => {
@@ -592,7 +622,7 @@ export default function Sandbox() {
 
   return (
     <div className="flex flex-col h-[100dvh] w-screen overflow-hidden bg-background text-foreground">
-      <header className="h-12 shrink-0 border-b flex items-center px-4 justify-between sticky top-0 z-40 bg-background">
+      <header className="h-12 shrink-0 border-b flex items-center px-4 justify-between sticky top-0 z-[60] bg-background">
         <div className="flex items-center gap-2">
           <h1 className="text-sm font-semibold">Loadz</h1>
           <a
@@ -609,15 +639,42 @@ export default function Sandbox() {
         </div>
         <div className="flex items-center gap-2">
           <span className="hidden sm:inline text-[10px] text-muted-foreground font-mono">{instances.length} instance{instances.length === 1 ? "" : "s"}</span>
-          <button
-            type="button"
-            onClick={() => setShowPreview((v) => !v)}
-            className="inline-flex items-center justify-center gap-1.5 rounded-md border border-border bg-background hover:bg-accent min-h-10 px-3 text-xs font-medium transition-colors md:min-h-0 md:px-2.5 md:py-1"
-            title={showPreview ? "Hide large preview" : "Show large preview"}
-          >
-            {showPreview ? <Eye size={12} /> : <EyeOff size={12} />}
-            <span className="hidden sm:inline">{showPreview ? "Preview on" : "Preview off"}</span>
-          </button>
+          <div ref={previewMenuRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setPreviewMenuOpen((v) => !v)}
+              className="inline-flex items-center justify-center gap-1.5 rounded-md border border-border bg-background hover:bg-accent min-h-10 px-3 text-xs font-medium transition-colors md:min-h-0 md:px-2.5 md:py-1"
+              title="Preview mode"
+              aria-haspopup="menu"
+              aria-expanded={previewMenuOpen}
+            >
+              <Eye size={12} />
+              <span className="hidden sm:inline">{PREVIEW_MODE_LABELS[previewMode]}</span>
+            </button>
+            {previewMenuOpen && (
+              <div
+                role="menu"
+                className="absolute right-0 top-full z-[60] mt-1 w-44 rounded-md border border-border bg-popover shadow-md overflow-hidden"
+              >
+                {(Object.keys(PREVIEW_MODE_LABELS) as PreviewMode[]).map((mode) => {
+                  const active = mode === previewMode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={active}
+                      onClick={() => { setPreviewMode(mode); setPreviewMenuOpen(false); }}
+                      className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs transition-colors ${active ? "bg-accent text-foreground" : "hover:bg-accent/50"}`}
+                    >
+                      <span>{PREVIEW_MODE_LABELS[mode]}</span>
+                      {active && <Check size={12} />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           {confirmingClear ? (
             <div className="inline-flex items-center gap-1 rounded-md border border-destructive/60 bg-destructive/10 min-h-10 px-3 md:min-h-0 md:px-2.5 md:py-1">
               <span className="text-xs text-destructive font-medium">Clear all?</span>
@@ -664,7 +721,7 @@ export default function Sandbox() {
           <div
             className="grid gap-4"
             style={{
-              gridTemplateColumns: showPreview
+              gridTemplateColumns: showLarge
                 ? "repeat(auto-fill, minmax(260px, 1fr))"
                 : "repeat(auto-fill, minmax(220px, 1fr))",
             }}
@@ -688,10 +745,15 @@ export default function Sandbox() {
                       setSettingsOpen(true);
                     }
                   }}
-                  className={`group flex flex-col gap-3 rounded-lg border p-4 cursor-pointer transition-colors ${
-                    active ? "border-primary/80 bg-accent/20" : "border-border hover:bg-accent/10"
-                  }`}
+                  className={
+                    showChrome
+                      ? `group flex flex-col gap-3 rounded-lg border p-4 cursor-pointer transition-colors ${
+                          active ? "border-primary/80 bg-accent/20" : "border-border hover:bg-accent/10"
+                        }`
+                      : `group flex flex-col ${previewMode === "original-only" ? "items-start" : "items-center"} justify-center gap-2 p-4 cursor-pointer rounded-lg transition-colors ${active ? "ring-1 ring-primary/80" : ""}`
+                  }
                 >
+                  {showChrome && (
                   <div className="flex items-center gap-1">
                     <Badge variant="outline" className="font-mono text-[10px] mr-1 text-muted-foreground">#{idx + 1}</Badge>
                     <div className="flex-1" />
@@ -734,8 +796,9 @@ export default function Sandbox() {
                       </button>
                     )}
                   </div>
+                  )}
 
-                  {showPreview && (
+                  {showLarge && (
                     <div
                       className="flex items-center justify-center"
                       style={{ height: compactTiles ? 88 : 144 }}
@@ -758,30 +821,32 @@ export default function Sandbox() {
                     </div>
                   )}
 
-                  <div className="min-h-[20px] overflow-hidden">
-                    <SimpleLoader
-                      displayText={inst.displayText}
-                      grid={{ size: inst.gridSize }}
-                      cellShape={inst.shape}
-                      animation={{ pattern: inst.pattern, style: inst.style, fps: inst.fps }}
-                      colors={inst.colors}
-                      transparentBg={inst.transparentBg}
-                      glow={inst.glow}
-                      size={inst.size}
-                      padding={inst.padding}
-                      cellSizeFactor={inst.cellSizeFactor}
-                      shimmer={inst.shimmer}
-                      paused={inst.paused}
-                      dataId={inst.id}
-                    />
-                  </div>
+                  {showOriginal && (
+                    <div className="min-h-[20px] overflow-hidden">
+                      <SimpleLoader
+                        displayText={inst.displayText}
+                        grid={{ size: inst.gridSize }}
+                        cellShape={inst.shape}
+                        animation={{ pattern: inst.pattern, style: inst.style, fps: inst.fps }}
+                        colors={inst.colors}
+                        transparentBg={inst.transparentBg}
+                        glow={inst.glow}
+                        size={inst.size}
+                        padding={inst.padding}
+                        cellSizeFactor={inst.cellSizeFactor}
+                        shimmer={inst.shimmer}
+                        paused={inst.paused}
+                        dataId={inst.id}
+                      />
+                    </div>
+                  )}
                 </div>
               );
             })}
             <button
               type="button"
               onClick={addInstance}
-              style={{ minHeight: showPreview ? (compactTiles ? 180 : 240) : 88 }}
+              style={{ minHeight: showLarge ? (compactTiles ? 180 : 240) : 88 }}
               className="group flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border text-muted-foreground hover:border-primary/60 hover:text-foreground hover:bg-accent/10 transition-colors cursor-pointer h-full"
               aria-label="Add loader"
               title="Add loader"
@@ -829,7 +894,7 @@ export default function Sandbox() {
                         const clampedPad = Math.min(selected.padding, maxPad);
                         update({ size: n, padding: clampedPad });
                       }}
-                      className={`h-8 px-2 min-w-8 rounded-md border text-xs font-medium transition-colors ${
+                      className={`h-11 px-3 min-w-11 md:h-8 md:px-2 md:min-w-8 rounded-md border text-sm md:text-xs font-medium transition-colors ${
                         active
                           ? "bg-primary text-primary-foreground border-primary"
                           : "bg-background hover:bg-accent border-border text-foreground"
@@ -876,7 +941,7 @@ export default function Sandbox() {
                       key={n}
                       type="button"
                       onClick={() => update({ gridSize: n })}
-                      className={`h-8 w-8 rounded-md border text-sm font-medium transition-colors ${
+                      className={`h-11 w-11 md:h-8 md:w-8 rounded-md border text-sm font-medium transition-colors ${
                         active
                           ? "bg-primary text-primary-foreground border-primary"
                           : "bg-background hover:bg-accent border-border text-foreground"
@@ -942,7 +1007,7 @@ export default function Sandbox() {
                         const next = SIMPLE_PATTERNS[(i - 1 + SIMPLE_PATTERNS.length) % SIMPLE_PATTERNS.length];
                         updatePattern(next.value);
                       }}
-                      className="flex-1 inline-flex items-center justify-center gap-1 h-7 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium transition-colors"
+                      className="flex-1 inline-flex items-center justify-center gap-1 h-11 md:h-7 rounded-md border border-border bg-background hover:bg-accent text-sm md:text-xs font-medium transition-colors"
                       aria-label="Previous pattern"
                     >
                       <ChevronLeft size={14} /> Prev
@@ -954,7 +1019,7 @@ export default function Sandbox() {
                         const next = SIMPLE_PATTERNS[(i + 1) % SIMPLE_PATTERNS.length];
                         updatePattern(next.value);
                       }}
-                      className="flex-1 inline-flex items-center justify-center gap-1 h-7 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium transition-colors"
+                      className="flex-1 inline-flex items-center justify-center gap-1 h-11 md:h-7 rounded-md border border-border bg-background hover:bg-accent text-sm md:text-xs font-medium transition-colors"
                       aria-label="Next pattern"
                     >
                       Next <ChevronRight size={14} />
@@ -1366,8 +1431,9 @@ function ColorRow({
                   key={preset}
                   type="button"
                   onClick={() => onChange(preset)}
-                  className="w-5 h-5 rounded border border-border"
+                  className="w-9 h-9 md:w-5 md:h-5 rounded border border-border"
                   style={{ backgroundColor: preset }}
+                  aria-label={preset}
                 />
               ),
             )}

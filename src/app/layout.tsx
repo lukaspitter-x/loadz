@@ -18,7 +18,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "loadz",
+  title: "Loadz",
   description: "Design tiny loading animations and export as React / SVG / PNG.",
 };
 
