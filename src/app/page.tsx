@@ -596,7 +596,7 @@ export default function Sandbox() {
         <div className="flex items-center gap-2">
           <h1 className="text-sm font-semibold">Loadz</h1>
           <a
-            href="https://github.com/lukaspitter-x/loader-builder"
+            href="https://github.com/lukaspitter-x/loadz"
             target="_blank"
             rel="noopener noreferrer"
             aria-label="View source on GitHub"
@@ -800,7 +800,7 @@ export default function Sandbox() {
             ${settingsOpen ? "translate-y-0" : "translate-y-full md:translate-y-0"}`}
         >
           <div className="flex items-center justify-between pl-4 pr-1 py-2 border-b sticky top-0 bg-zinc-900 md:bg-background z-10">
-            <h2 className="text-base font-normal tracking-tight text-foreground uppercase">Settings</h2>
+            <h2 className="text-sm font-semibold">Settings</h2>
             <button
               type="button"
               onClick={() => setSettingsOpen(false)}
