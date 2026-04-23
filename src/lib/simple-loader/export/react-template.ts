@@ -22,11 +22,9 @@ export type CellShape =
   | "star";
 
 export type AnimStyle = "pulse-size" | "pulse-opacity" | "pulse-color";
-export type BgStyle = "breathe" | "none";
 
 export interface LoaderColors {
   primary: string;
-  secondary?: string;
   inactiveCells: string;
   background: string;
   text: string;
@@ -107,15 +105,12 @@ function applyStyle(
   t: number,
   primary: string,
   inactive: string,
-  bg: BgStyle,
-  tick: number,
 ): CellStyle {
-  const bgT = bg === "breathe" ? 0.15 + Math.sin(tick * 0.03) * 0.05 : 0.15;
   switch (style) {
     case "pulse-size":
       return { scale: 0.35 + t * 0.8, opacity: 0.25 + t * 0.75, fill: primary };
     case "pulse-opacity":
-      return { scale: 0.9, opacity: Math.max(bgT, t), fill: primary };
+      return { scale: 0.9, opacity: Math.max(0.15, t), fill: primary };
     case "pulse-color":
       return { scale: 0.9, opacity: 1, fill: blendColor(inactive, primary, t) };
   }
@@ -156,13 +151,16 @@ function makeScatterCells(count: number, area: number): ScatterCell[] {
   return out;
 }
 
-function stepScatter(cells: ScatterCell[], tick: number, bound: number) {
+function fpsRate(fps: number): number { return Math.max(6, Math.min(60, fps)) / 24; }
+
+function stepScatter(cells: ScatterCell[], tick: number, bound: number, fps: number = 24) {
+  const rate = fpsRate(fps);
   return cells.map((cell) => {
-    cell.ox += cell.vx;
-    cell.oy += cell.vy;
+    cell.ox += cell.vx * rate;
+    cell.oy += cell.vy * rate;
     if (Math.abs(cell.ox) > bound) cell.vx = -cell.vx;
     if (Math.abs(cell.oy) > bound) cell.vy = -cell.vy;
-    const pulse = (Math.sin(tick * 0.05 + cell.baseX * 0.02) + 1) / 2;
+    const pulse = (Math.sin(tick * 0.05 * rate + cell.baseX * 0.02) + 1) / 2;
     return { x: cell.baseX + cell.ox, y: cell.baseY + cell.oy, opacity: 0.3 + pulse * 0.7 };
   });
 }
@@ -178,8 +176,8 @@ const NODE_EDGES: [number, number][] = [
   [0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3],
 ];
 
-function stepNodeGraph(tick: number, area: number) {
-  const t = tick * 0.04;
+function stepNodeGraph(tick: number, area: number, fps: number = 24) {
+  const t = tick * 0.04 * fpsRate(fps);
   const driftA = area * 0.05;
   const driftB = area * 0.07;
   const nodes = NODE_POSITIONS.map(([bx, by], i) => {
@@ -212,9 +210,10 @@ function makeConstellation(area: number): ConstellationNode[] {
   }
   return out;
 }
-function stepConstellation(nodes: ConstellationNode[], area: number) {
+function stepConstellation(nodes: ConstellationNode[], area: number, fps: number = 24) {
+  const rate = fpsRate(fps);
   nodes.forEach((n) => {
-    n.x += n.vx; n.y += n.vy;
+    n.x += n.vx * rate; n.y += n.vy * rate;
     if (n.x < 0 || n.x > area) { n.vx = -n.vx; n.x = Math.max(0, Math.min(area, n.x)); }
     if (n.y < 0 || n.y > area) { n.vy = -n.vy; n.y = Math.max(0, Math.min(area, n.y)); }
   });
@@ -240,9 +239,9 @@ function pulseNodePositions(area: number) {
   }
   return out;
 }
-function stepNetworkPulse(tick: number) {
+function stepNetworkPulse(tick: number, fps: number = 24) {
   const count = PULSE_NODE_COUNT;
-  const packet = (tick * 0.06) % count;
+  const packet = (tick * 0.06 * fpsRate(fps)) % count;
   const nodes = [];
   for (let i = 0; i < count; i++) {
     const diff = Math.abs(((packet - i + count / 2) % count) - count / 2);
@@ -260,8 +259,8 @@ function stepNetworkPulse(tick: number) {
 }
 
 const MOLECULAR_SATELLITES = 3;
-function stepMolecular(tick: number, area: number) {
-  const cx = area / 2; const cy = area / 2; const t = tick * 0.05;
+function stepMolecular(tick: number, area: number, fps: number = 24) {
+  const cx = area / 2; const cy = area / 2; const t = tick * 0.05 * fpsRate(fps);
   const radii = [area * 0.2, area * 0.33, area * 0.45];
   const speeds = [1.1, -0.75, 0.5];
   const phases = [0, 2.1, 4.3];
@@ -695,9 +694,10 @@ function evalGridPattern(
     return { opacity: 0.05 + v * 0.95, scale: 0.25 + v * 0.75 };
   }
   if (pattern === "ascii-cycle") {
-    const glyphIdx = Math.floor(tick / 10) % ASCII_CYCLE_GLYPHS.length;
+    const adv = tick * rate / 10;
+    const glyphIdx = Math.floor(adv) % ASCII_CYCLE_GLYPHS.length;
     const glyph = ASCII_CYCLE_GLYPHS[glyphIdx];
-    const sub = (tick / 10) % 1;
+    const sub = adv % 1;
     const fadeIn = Math.min(1, sub * 3);
     const active = sampleGlyph(glyph, r, c, size);
     if (!active) return { opacity: 0.05, scale: 0.25 };
@@ -733,7 +733,7 @@ function evalGridPattern(
   }
 
   const phaseT = gridPhaseT(pattern, r, c, size, t);
-  const s = applyStyle("pulse-size", phaseT, primary, inactive, "none", tick);
+  const s = applyStyle("pulse-size", phaseT, primary, inactive);
   return { opacity: s.opacity, scale: s.scale, color: s.fill };
 }
 
@@ -764,9 +764,17 @@ function ensureTextFxKeyframes() {
   document.head.appendChild(el);
 }
 
-function shimmerStyle(baseColor: string, speed: number, mode: Exclude<TextFxMode, "cursor">): CSSProperties {
+function shimmerStyle(
+  baseColor: string,
+  speed: number,
+  mode: Exclude<TextFxMode, "cursor">,
+  highlight?: string,
+  stops?: [string, string, string],
+): CSSProperties {
   ensureTextFxKeyframes();
   const duration = Math.max(0.4, 2.5 / Math.max(0.2, speed));
+  const peak = highlight || baseColor;
+  const g = stops ?? ["#6CB4FF", "#BD93F9", "#F5A3C7"];
   const common: CSSProperties = {
     display: "inline-block",
     backgroundSize: "300% 100%",
@@ -779,11 +787,11 @@ function shimmerStyle(baseColor: string, speed: number, mode: Exclude<TextFxMode
     return {
       ...common,
       backgroundImage: \`linear-gradient(100deg,
-        \${baseColor}33 0%,
-        \${baseColor}33 44%,
-        \${baseColor} 50%,
-        \${baseColor}33 56%,
-        \${baseColor}33 100%)\`,
+        \${baseColor}80 0%,
+        \${baseColor}80 44%,
+        \${peak} 50%,
+        \${baseColor}80 56%,
+        \${baseColor}80 100%)\`,
       animation: \`simple-shine \${duration * 1.4}s ease-in-out infinite\`,
     };
   }
@@ -792,11 +800,13 @@ function shimmerStyle(baseColor: string, speed: number, mode: Exclude<TextFxMode
       ...common,
       backgroundImage: \`linear-gradient(90deg,
         \${baseColor} 0%,
-        #6CB4FF 20%,
-        #BD93F9 35%,
-        #F5A3C7 50%,
-        #BD93F9 65%,
-        #6CB4FF 80%,
+        \${baseColor} 33%,
+        \${g[0]} 40%,
+        \${g[1]} 45%,
+        \${g[2]} 50%,
+        \${g[1]} 55%,
+        \${g[0]} 60%,
+        \${baseColor} 67%,
         \${baseColor} 100%)\`,
       animation: \`simple-shimmer \${duration * 1.4}s linear infinite\`,
     };
@@ -804,11 +814,11 @@ function shimmerStyle(baseColor: string, speed: number, mode: Exclude<TextFxMode
   return {
     ...common,
     backgroundImage: \`linear-gradient(90deg,
-      \${baseColor}66 0%,
-      \${baseColor}66 30%,
-      \${baseColor} 50%,
-      \${baseColor}66 70%,
-      \${baseColor}66 100%)\`,
+      \${baseColor}80 0%,
+      \${baseColor}80 30%,
+      \${peak} 50%,
+      \${baseColor}80 70%,
+      \${baseColor}80 100%)\`,
     animation: \`simple-shimmer \${duration}s linear infinite\`,
   };
 }
@@ -818,14 +828,15 @@ function TextLabel({
 }: {
   text: string;
   color: string;
-  shimmer?: { enabled: boolean; speed: number; mode?: TextFxMode };
+  shimmer?: { enabled: boolean; speed: number; mode?: TextFxMode; base?: string; highlight?: string; stops?: [string, string, string] };
 }) {
   if (!shimmer?.enabled) return <span>{text}</span>;
   const mode = shimmer.mode ?? "shimmer";
   if (mode === "cursor") {
     return <TypewriterLabel text={text} color={color} speed={shimmer.speed} />;
   }
-  return <span style={shimmerStyle(color, shimmer.speed, mode)}>{text}</span>;
+  const baseColor = shimmer.base || color;
+  return <span style={shimmerStyle(baseColor, shimmer.speed, mode, shimmer.highlight, shimmer.stops)}>{text}</span>;
 }
 
 function TypewriterLabel({ text, color, speed }: { text: string; color: string; speed: number }) {
@@ -868,7 +879,7 @@ function TypewriterLabel({ text, color, speed }: { text: string; color: string; 
 
   return (
     <span style={{ color, position: "relative", display: "inline-block", whiteSpace: "pre" }}>
-      <span aria-hidden style={{ visibility: "hidden" }}>{text}</span>
+      <span aria-hidden style={{ visibility: "hidden", paddingRight: 4 }}>{text}</span>
       <span style={{ position: "absolute", inset: 0, display: "inline-flex", alignItems: "center", gap: 2, whiteSpace: "pre" }}>
         <span>{typed}</span>
         <span
@@ -899,12 +910,11 @@ export interface SimpleLoaderProps {
     pattern: SimplePattern;
     style: AnimStyle;
     fps: number;
-    backgroundStyle: BgStyle;
   };
   colors: LoaderColors;
   transparentBg?: boolean;
   glow?: { enabled: boolean; size: number; intensity: number };
-  shimmer?: { enabled: boolean; speed: number; mode?: TextFxMode };
+  shimmer?: { enabled: boolean; speed: number; mode?: TextFxMode; base?: string; highlight?: string; stops?: [string, string, string] };
 }
 
 type GridCell = { r: number; c: number; cx: number; cy: number };
@@ -914,7 +924,6 @@ interface StepArgs {
   tick: number;
   fps: number;
   style: AnimStyle;
-  bg: BgStyle;
   size: number;
   area: number;
   pad: number;
@@ -934,7 +943,7 @@ function stepPattern(args: StepArgs) {
   const { pattern, tick, fps, colors, refs } = args;
 
   if (pattern === "node-graph") {
-    const { nodes, edges } = stepNodeGraph(tick, args.area);
+    const { nodes, edges } = stepNodeGraph(tick, args.area, args.fps);
     nodes.forEach((n, i) => {
       const el = refs.shapes[i];
       if (!el) return;
@@ -955,7 +964,7 @@ function stepPattern(args: StepArgs) {
     return;
   }
   if (pattern === "constellation") {
-    const { positions, edges } = stepConstellation(args.constellationState, args.area);
+    const { positions, edges } = stepConstellation(args.constellationState, args.area, args.fps);
     positions.forEach((p, i) => {
       const el = refs.shapes[i];
       if (!el) return;
@@ -978,7 +987,7 @@ function stepPattern(args: StepArgs) {
     return;
   }
   if (pattern === "network-pulse") {
-    const { nodes, edges } = stepNetworkPulse(tick);
+    const { nodes, edges } = stepNetworkPulse(tick, args.fps);
     nodes.forEach((n, i) => {
       const el = refs.shapes[i];
       if (!el) return;
@@ -995,7 +1004,7 @@ function stepPattern(args: StepArgs) {
     return;
   }
   if (pattern === "molecular") {
-    const { center, satellites } = stepMolecular(tick, args.area);
+    const { center, satellites } = stepMolecular(tick, args.area, args.fps);
     const centerEl = refs.shapes[0];
     if (centerEl) {
       centerEl.setAttribute("transform", \`translate(\${args.pad + center.x} \${args.pad + center.y}) scale(\${center.scale})\`);
@@ -1022,7 +1031,7 @@ function stepPattern(args: StepArgs) {
     return;
   }
   if (pattern === "scatter") {
-    const positions = stepScatter(args.scatterState, tick, args.scatterBound);
+    const positions = stepScatter(args.scatterState, tick, args.scatterBound, args.fps);
     positions.forEach((p, i) => {
       const el = refs.shapes[i];
       if (!el) return;
@@ -1041,14 +1050,10 @@ function stepPattern(args: StepArgs) {
     let out: CellOut;
     if (gridOriginal) {
       const phaseT = gridPhaseT(pattern, cell.r, cell.c, args.size, t);
-      const s = applyStyle(args.style, phaseT, colors.primary, colors.inactiveCells, args.bg, tick);
+      const s = applyStyle(args.style, phaseT, colors.primary, colors.inactiveCells);
       out = { opacity: s.opacity, scale: s.scale, color: s.fill };
     } else {
       out = evalGridPattern(pattern, cell.r, cell.c, args.size, tick, fps, t, colors.primary, colors.inactiveCells);
-      if (args.bg === "breathe" && out.opacity < 0.3) {
-        const breatheFloor = 0.15 + Math.sin(tick * 0.03) * 0.05;
-        out.opacity = Math.max(out.opacity, breatheFloor);
-      }
     }
     const baseSize = args.gridCells.cellSize;
     const drawn = baseSize * out.scale;
@@ -1165,14 +1170,15 @@ export function SimpleLoader({
   const edgeRefs = useRef<(SVGLineElement | null)[]>([]);
   const tickRef = useRef(30);
 
-  // Paint one frame synchronously so static / paused loaders show content.
+  // Paint one frame synchronously when config changes so static / paused
+  // loaders show content. Dep-gated — a parent re-render won't force a
+  // synchronous stepPattern.
   useLayoutEffect(() => {
     stepPattern({
       pattern,
       tick: tickRef.current,
       fps: anim.fps,
       style: anim.style,
-      bg: anim.backgroundStyle,
       size: effectiveSize,
       area: AREA,
       pad: PAD,
@@ -1184,34 +1190,49 @@ export function SimpleLoader({
       constellationState: constellationStateRef.current,
       refs: { shapes: shapeRefs.current, edges: edgeRefs.current },
     });
-  });
+  }, [pattern, anim.fps, anim.style, effectiveSize, gridCells, colors, cellShape, scatterBound, AREA, PAD]);
 
+  // Wall-clock-gated rAF loop so motion speed matches the configured fps
+  // regardless of display refresh rate.
   useEffect(() => {
+    const targetMs = 1000 / Math.max(1, anim.fps);
     let raf = 0;
-    const loop = () => {
-      tickRef.current++;
-      stepPattern({
-        pattern,
-        tick: tickRef.current,
-        fps: anim.fps,
-        style: anim.style,
-        bg: anim.backgroundStyle,
-        size: effectiveSize,
-        area: AREA,
-        pad: PAD,
-        colors: colors!,
-        cellShape: cellShape!,
-        gridCells,
-        scatterState: scatterStateRef.current,
-        scatterBound,
-        constellationState: constellationStateRef.current,
-        refs: { shapes: shapeRefs.current, edges: edgeRefs.current },
-      });
+    let last = performance.now();
+    let accum = 0;
+    const loop = (now: number) => {
+      const dt = now - last;
+      last = now;
+      accum += dt;
+      if (accum > 500) accum = targetMs;
+      let advanced = false;
+      while (accum >= targetMs) {
+        tickRef.current++;
+        accum -= targetMs;
+        advanced = true;
+      }
+      if (advanced) {
+        stepPattern({
+          pattern,
+          tick: tickRef.current,
+          fps: anim.fps,
+          style: anim.style,
+          size: effectiveSize,
+          area: AREA,
+          pad: PAD,
+          colors: colors!,
+          cellShape: cellShape!,
+          gridCells,
+          scatterState: scatterStateRef.current,
+          scatterBound,
+          constellationState: constellationStateRef.current,
+          refs: { shapes: shapeRefs.current, edges: edgeRefs.current },
+        });
+      }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [pattern, anim.fps, anim.style, anim.backgroundStyle, effectiveSize, gridCells, colors, cellShape]);
+  }, [pattern, anim.fps, anim.style, effectiveSize, gridCells, colors, cellShape, scatterBound, AREA, PAD]);
 
   const isOffGrid =
     pattern === "scatter" ||

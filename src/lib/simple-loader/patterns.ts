@@ -1,7 +1,9 @@
-import type { AnimPattern } from "../types";
-
 export type SimplePattern =
-  | AnimPattern
+  | "wave-diagonal"
+  | "expanding-pulse"
+  | "staircase"
+  | "scatter"
+  | "node-graph"
   | "orbit"
   | "ring"
   | "dot-pulse"

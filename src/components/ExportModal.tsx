@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Check, Copy, Download, X } from "lucide-react";
-import type { AnimStyle, BgStyle, CellShape, LoaderColors } from "@/lib/types";
+import type { AnimStyle, CellShape, LoaderColors } from "@/lib/types";
 import type { SimplePattern } from "@/lib/simple-loader/patterns";
 import {
   buildHtmlSnippet,
@@ -17,7 +17,6 @@ interface Instance {
   pattern: SimplePattern;
   style: AnimStyle;
   shape: CellShape;
-  bg: BgStyle;
   fps: number;
   size: number;
   padding: number;
@@ -27,7 +26,7 @@ interface Instance {
   transparentBg: boolean;
   paused: boolean;
   glow: { enabled: boolean; size: number; intensity: number };
-  shimmer: { enabled: boolean; speed: number; mode: "shimmer" | "shine" | "gradient" | "cursor" };
+  shimmer: { enabled: boolean; speed: number; mode: "shimmer" | "shine" | "gradient" | "cursor"; base?: string; highlight?: string; stops?: [string, string, string] };
 }
 
 type Tab = "json" | "react" | "html" | "svg" | "png";

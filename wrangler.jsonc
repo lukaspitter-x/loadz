@@ -1,14 +1,14 @@
 {
-  "name": "loader-builder",
-  "account_id": "d38beb68e6a321eae3082cdca6fafbb2",
+  "name": "loadz",
+  "account_id": "77e659a816f142363de173b3d9f1bdaa",
   "main": ".open-next/worker.js",
   "compatibility_date": "2026-04-07",
   "compatibility_flags": ["nodejs_compat"],
-  "limits": {
-    "cpu_ms": 300000
-  },
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS"
-  }
+  },
+  "routes": [
+    { "pattern": "loadz.aaxx24.cc/*", "zone_id": "133aec18f7bcaa47f39ee8f4c4542beb" }
+  ]
 }

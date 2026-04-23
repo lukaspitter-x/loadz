@@ -1,16 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronLeft, ChevronRight, Download, Eye, EyeOff, Pause, Play, Plus, Trash2, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Download, Eye, EyeOff, Pause, Play, Plus, Trash2, X } from "lucide-react";
 import { HexColorPicker } from "react-colorful";
 import { SimpleLoader } from "@/components/SimpleLoader";
 import { ExportModal } from "@/components/ExportModal";
 import {
-  BG_STYLES,
   CELL_SHAPES,
   STYLES,
   type AnimStyle,
-  type BgStyle,
   type CellShape,
   type LoaderColors,
 } from "@/lib/types";
@@ -38,7 +36,6 @@ interface Instance {
   pattern: SimplePattern;
   style: AnimStyle;
   shape: CellShape;
-  bg: BgStyle;
   fps: number;
   size: number;
   padding: number;
@@ -48,7 +45,14 @@ interface Instance {
   transparentBg: boolean;
   paused: boolean;
   glow: { enabled: boolean; size: number; intensity: number };
-  shimmer: { enabled: boolean; speed: number; mode: "shimmer" | "shine" | "gradient" | "cursor" };
+  shimmer: {
+    enabled: boolean;
+    speed: number;
+    mode: "shimmer" | "shine" | "gradient" | "cursor";
+    base?: string;
+    highlight?: string;
+    stops?: [string, string, string];
+  };
 }
 
 const DEFAULT_COLORS: LoaderColors = {
@@ -71,7 +75,6 @@ function makeInstance(overrides: Partial<Instance> & { id?: string } = {}): Inst
     pattern: "wave-diagonal",
     style: "pulse-size",
     shape: "rounded-rect",
-    bg: "none",
     fps: 24,
     size: 12,
     padding: 1,
@@ -218,6 +221,51 @@ function randomBeautifulPalette(): Palette {
   return Math.random() < 0.7 ? pick(PALETTE_LIBRARY) : proceduralPalette();
 }
 
+function hexToHsl(hex: string): [number, number, number] {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const r = parseInt(full.slice(0, 2), 16) / 255;
+  const g = parseInt(full.slice(2, 4), 16) / 255;
+  const b = parseInt(full.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  let hDeg = 0, s = 0;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: hDeg = ((g - b) / d + (g < b ? 6 : 0)); break;
+      case g: hDeg = (b - r) / d + 2; break;
+      case b: hDeg = (r - g) / d + 4; break;
+    }
+    hDeg *= 60;
+  }
+  return [hDeg, s * 100, l * 100];
+}
+
+// Derive highlight options and a gradient trio from the palette's primary so
+// text effects stay chromatically related to the loader animation.
+function harmonizedFxColors(primary: string, text: string): {
+  bases: string[];
+  highlights: string[];
+  trio: [string, string, string];
+} {
+  const [h, s, l] = hexToHsl(primary);
+  const sClamped = Math.max(55, Math.min(95, s));
+  const bright = hslToHex(h, sClamped, Math.min(85, l + 25));
+  const light = hslToHex(h, Math.max(30, sClamped - 25), 92);
+  const mutedPrimary = hslToHex(h, Math.max(25, sClamped - 35), Math.min(82, l + 18));
+  const tintedText = hslToHex(h, 20, 88);
+  const bases = [text, tintedText, mutedPrimary, light];
+  const highlights = [bright, light, text, "#FFFFFF"];
+  const trio: [string, string, string] = [
+    hslToHex((h + 330) % 360, sClamped, Math.min(75, l + 15)),
+    hslToHex(h, sClamped, Math.min(70, l + 10)),
+    hslToHex((h + 40) % 360, sClamped, Math.min(78, l + 20)),
+  ];
+  return { bases, highlights, trio };
+}
+
 const TEXT_FX_MODES: ("shimmer" | "shine" | "gradient" | "cursor")[] = [
   "shimmer",
   "shine",
@@ -245,13 +293,14 @@ function ensureReadableText(hex: string): string {
   return lum < 0.55 ? "#F5F5F5" : hex;
 }
 
-function randomBeautifulConfig(base: Inheritable): Partial<Instance> {
-  // Pattern: any non-status (status glyphs carry semantic meaning; don't autogen).
-  const pattern = pick(
-    SIMPLE_PATTERNS.filter((p) => p.group !== "Status").map((p) => p.value),
-  );
+function randomBeautifulConfig(base: Inheritable, excludePattern?: SimplePattern): Partial<Instance> {
+  // Pattern: any non-status (status glyphs carry semantic meaning; don't autogen),
+  // and never the same as the caller's last pattern — back-to-back duplicates feel unintentional.
+  const candidates = SIMPLE_PATTERNS
+    .filter((p) => p.group !== "Status" && p.value !== excludePattern)
+    .map((p) => p.value);
+  const pattern = pick(candidates);
   const style = pick(["pulse-size", "pulse-opacity", "pulse-color"] as const);
-  const bg = Math.random() < 0.35 ? "breathe" : "none";
   const fps = pick([18, 20, 24, 24, 24, 30, 36]);
   const palette = randomBeautifulPalette();
   // 20% chance to still override the palette's suggested glow with a surprise tweak
@@ -262,14 +311,24 @@ function randomBeautifulConfig(base: Inheritable): Partial<Instance> {
     : palette.glow;
   const displayText = pick(RANDOM_TEXTS);
   const shimmer = Math.random() < 0.5
-    ? { enabled: true, speed: 0.8 + Math.random() * 1.4, mode: pick(TEXT_FX_MODES) }
+    ? (() => {
+        const mode = pick(TEXT_FX_MODES);
+        const base = { enabled: true as const, speed: 0.8 + Math.random() * 1.4, mode };
+        const fx = harmonizedFxColors(palette.primary, palette.text);
+        if (mode === "shimmer" || mode === "shine") {
+          return { ...base, base: pick(fx.bases), highlight: pick(fx.highlights) };
+        }
+        if (mode === "gradient") {
+          return { ...base, stops: fx.trio };
+        }
+        return base;
+      })()
     : { enabled: false, speed: 1.2, mode: "shimmer" as const };
 
   return {
     displayText,
     pattern,
     style,
-    bg,
     fps,
     gridSize: base.gridSize,
     colors: {
@@ -295,7 +354,6 @@ const DEFAULT_INSTANCE_OVERRIDES: Partial<Instance> = {
   pattern: "flame",
   style: "pulse-opacity",
   shape: "rounded-rect",
-  bg: "none",
   fps: 24,
   size: 12,
   padding: 1,
@@ -312,8 +370,54 @@ const DEFAULT_INSTANCE_OVERRIDES: Partial<Instance> = {
   shimmer: { enabled: true, speed: 1.2, mode: "shimmer" },
 };
 
+const SECOND_DEFAULT_INSTANCE_OVERRIDES: Partial<Instance> = {
+  displayText: "Syncing…",
+  pattern: "ripples",
+  style: "pulse-size",
+  shape: "rounded-rect",
+  fps: 20,
+  size: 24,
+  padding: 1,
+  gridSize: 7,
+  cellSizeFactor: 0.5,
+  transparentBg: false,
+  colors: {
+    primary: "#3DFF77",
+    inactiveCells: "#00B4D8",
+    background: "#002114",
+    text: "#D0FFD8",
+  },
+  glow: { enabled: true, size: 1, intensity: 1.5 },
+  shimmer: { enabled: false, speed: 1.2, mode: "shimmer" },
+};
+
+const THIRD_DEFAULT_INSTANCE_OVERRIDES: Partial<Instance> = {
+  displayText: "Processing…",
+  pattern: "dot-wave",
+  style: "pulse-size",
+  shape: "rounded-rect",
+  fps: 36,
+  size: 8,
+  padding: 1,
+  gridSize: 3,
+  cellSizeFactor: 0.75,
+  transparentBg: false,
+  colors: {
+    primary: "#FF0059",
+    inactiveCells: "#FFB703",
+    background: "#1A0005",
+    text: "#e1587d",
+  },
+  glow: { enabled: true, size: 1.1, intensity: 1.8 },
+  shimmer: { enabled: true, speed: 1.2, mode: "shine" },
+};
+
 function seedInstances(): Instance[] {
-  return [makeInstance({ id: "seed-1", ...DEFAULT_INSTANCE_OVERRIDES })];
+  return [
+    makeInstance({ id: "seed-1", ...DEFAULT_INSTANCE_OVERRIDES }),
+    makeInstance({ id: "seed-2", ...SECOND_DEFAULT_INSTANCE_OVERRIDES }),
+    makeInstance({ id: "seed-3", ...THIRD_DEFAULT_INSTANCE_OVERRIDES }),
+  ];
 }
 
 interface PersistedState {
@@ -380,10 +484,23 @@ export default function Sandbox() {
   }, [hydrated, instances, selectedId]);
   const selected = instances.find((i) => i.id === selectedId) ?? instances[0];
   const [expandedColor, setExpandedColor] = useState<keyof LoaderColors | null>(null);
+  const [expandedFxColor, setExpandedFxColor] = useState<"base" | "highlight" | "stop0" | "stop1" | "stop2" | null>(null);
   const [exportInstanceId, setExportInstanceId] = useState<string | null>(null);
   const exportInstance = instances.find((i) => i.id === exportInstanceId) ?? null;
   const [showPreview, setShowPreview] = useState<boolean>(true);
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
+  const [isMobile, setIsMobile] = useState<boolean>(false);
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 767px)");
+    const sync = () => setIsMobile(mql.matches);
+    sync();
+    mql.addEventListener("change", sync);
+    return () => mql.removeEventListener("change", sync);
+  }, []);
+  // When the bottom-sheet is open on mobile, shrink each tile so the full
+  // tile (controls + preview + label) fits in the slice of viewport above
+  // the sheet.
+  const compactTiles = isMobile && settingsOpen;
 
   // Keep the selected tile visible when editing — scroll it into the viewport
   // above the bottom-sheet on mobile, and into a comfortable center on desktop.
@@ -393,7 +510,7 @@ export default function Sandbox() {
     if (!el) return;
     const raf = requestAnimationFrame(() => {
       const isMobile = window.matchMedia("(max-width: 767px)").matches;
-      el.scrollIntoView({ behavior: "smooth", block: isMobile && settingsOpen ? "start" : "center" });
+      el.scrollIntoView({ behavior: "smooth", block: isMobile && settingsOpen ? "end" : "center" });
     });
     return () => cancelAnimationFrame(raf);
   }, [selectedId, settingsOpen]);
@@ -412,9 +529,9 @@ export default function Sandbox() {
     return () => clearTimeout(t);
   }, [confirmingClear]);
   const clearAll = () => {
-    const fresh = makeInstance({ id: "seed-1", ...DEFAULT_INSTANCE_OVERRIDES });
-    setInstances([fresh]);
-    setSelectedId(fresh.id);
+    const fresh = seedInstances();
+    setInstances(fresh);
+    setSelectedId(fresh[0].id);
     setConfirmingClear(false);
   };
 
@@ -435,7 +552,8 @@ export default function Sandbox() {
       shape: selected.shape,
       gridSize: selected.gridSize,
     };
-    const n = makeInstance(randomBeautifulConfig(base));
+    const last = instances[instances.length - 1];
+    const n = makeInstance(randomBeautifulConfig(base, last?.pattern));
     setInstances((arr) => [...arr, n]);
     setSelectedId(n.id);
   };
@@ -473,10 +591,21 @@ export default function Sandbox() {
   }, [instances.length, selectedId, exportInstanceId, expandedColor]);
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-background text-foreground">
-      <header className="h-12 shrink-0 border-b flex items-center px-4 justify-between">
+    <div className="flex flex-col h-[100dvh] w-screen overflow-hidden bg-background text-foreground">
+      <header className="h-12 shrink-0 border-b flex items-center px-4 justify-between sticky top-0 z-40 bg-background">
         <div className="flex items-center gap-2">
-          <h1 className="text-sm font-semibold">Loader Builder</h1>
+          <h1 className="text-sm font-semibold">Loadz</h1>
+          <a
+            href="https://github.com/lukaspitter-x/loader-builder"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="View source on GitHub"
+            className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <path d="M12 .5C5.73.5.67 5.56.67 11.83c0 4.99 3.24 9.22 7.73 10.72.57.1.78-.25.78-.55 0-.27-.01-1.17-.02-2.12-3.14.68-3.8-1.34-3.8-1.34-.51-1.3-1.26-1.65-1.26-1.65-1.03-.7.08-.69.08-.69 1.14.08 1.74 1.17 1.74 1.17 1.01 1.74 2.66 1.24 3.31.95.1-.73.4-1.24.72-1.52-2.51-.29-5.15-1.26-5.15-5.6 0-1.24.44-2.25 1.17-3.04-.12-.29-.51-1.44.11-3 0 0 .95-.3 3.12 1.16.9-.25 1.87-.37 2.83-.38.96 0 1.93.13 2.83.38 2.17-1.47 3.12-1.16 3.12-1.16.62 1.56.23 2.71.11 3 .73.79 1.17 1.8 1.17 3.04 0 4.35-2.65 5.3-5.17 5.58.41.36.77 1.05.77 2.12 0 1.53-.01 2.76-.01 3.13 0 .3.2.66.79.55 4.49-1.5 7.72-5.73 7.72-10.72C23.33 5.56 18.27.5 12 .5z"/>
+            </svg>
+          </a>
         </div>
         <div className="flex items-center gap-2">
           <span className="hidden sm:inline text-[10px] text-muted-foreground font-mono">{instances.length} instance{instances.length === 1 ? "" : "s"}</span>
@@ -490,21 +619,23 @@ export default function Sandbox() {
             <span className="hidden sm:inline">{showPreview ? "Preview on" : "Preview off"}</span>
           </button>
           {confirmingClear ? (
-            <div className="inline-flex items-center gap-1 rounded-md border border-destructive/60 bg-destructive/10 px-2 py-1">
+            <div className="inline-flex items-center gap-1 rounded-md border border-destructive/60 bg-destructive/10 min-h-10 px-3 md:min-h-0 md:px-2.5 md:py-1">
               <span className="text-xs text-destructive font-medium">Clear all?</span>
               <button
                 type="button"
                 onClick={() => setConfirmingClear(false)}
-                className="inline-flex items-center justify-center rounded-md min-h-10 px-3 text-xs font-medium hover:bg-background transition-colors md:min-h-0 md:px-2 md:py-0.5"
+                aria-label="Cancel"
+                className="inline-flex items-center justify-center rounded-md h-8 w-8 text-xs font-medium hover:bg-background transition-colors md:h-auto md:w-auto md:px-2 md:py-0.5"
               >
-                Cancel
+                <X size={14} />
               </button>
               <button
                 type="button"
                 onClick={clearAll}
-                className="inline-flex items-center justify-center rounded-md border border-destructive bg-destructive text-destructive-foreground hover:bg-destructive/90 min-h-10 px-3 text-xs font-medium transition-colors md:min-h-0 md:px-2 md:py-0.5"
+                aria-label="Clear"
+                className="inline-flex items-center justify-center rounded-md border border-destructive bg-destructive text-destructive-foreground hover:bg-destructive/90 h-8 w-8 text-xs font-medium transition-colors md:h-auto md:w-auto md:px-2 md:py-0.5"
               >
-                Clear
+                <Check size={14} />
               </button>
             </div>
           ) : (
@@ -544,7 +675,13 @@ export default function Sandbox() {
                 <div
                   key={inst.id}
                   data-inst-tile={inst.id}
-                  style={{ scrollMarginTop: 16, scrollMarginBottom: 24 }}
+                  style={{
+                    scrollMarginTop: 16,
+                    // On mobile with the settings sheet open, reserve the
+                    // sheet's height (60vh) plus a comfy gap so the tile
+                    // settles above the sheet, fully visible.
+                    scrollMarginBottom: settingsOpen ? "calc(60vh + 16px)" : 24,
+                  }}
                   onClick={() => {
                     setSelectedId(inst.id);
                     if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) {
@@ -599,12 +736,15 @@ export default function Sandbox() {
                   </div>
 
                   {showPreview && (
-                    <div className="flex items-center justify-center" style={{ height: 144 }}>
+                    <div
+                      className="flex items-center justify-center"
+                      style={{ height: compactTiles ? 88 : 144 }}
+                    >
                       <SimpleLoader
                         displayText=""
                         grid={{ size: inst.gridSize }}
                         cellShape={inst.shape}
-                        animation={{ pattern: inst.pattern, style: inst.style, fps: inst.fps, backgroundStyle: inst.bg }}
+                        animation={{ pattern: inst.pattern, style: inst.style, fps: inst.fps }}
                         colors={inst.colors}
                         transparentBg={inst.transparentBg}
                         glow={inst.glow}
@@ -613,7 +753,7 @@ export default function Sandbox() {
                         cellSizeFactor={inst.cellSizeFactor}
                         shimmer={inst.shimmer}
                         paused={inst.paused}
-                        displayPx={120}
+                        displayPx={compactTiles ? 72 : 120}
                       />
                     </div>
                   )}
@@ -623,7 +763,7 @@ export default function Sandbox() {
                       displayText={inst.displayText}
                       grid={{ size: inst.gridSize }}
                       cellShape={inst.shape}
-                      animation={{ pattern: inst.pattern, style: inst.style, fps: inst.fps, backgroundStyle: inst.bg }}
+                      animation={{ pattern: inst.pattern, style: inst.style, fps: inst.fps }}
                       colors={inst.colors}
                       transparentBg={inst.transparentBg}
                       glow={inst.glow}
@@ -641,7 +781,7 @@ export default function Sandbox() {
             <button
               type="button"
               onClick={addInstance}
-              style={{ minHeight: showPreview ? 240 : 88 }}
+              style={{ minHeight: showPreview ? (compactTiles ? 180 : 240) : 88 }}
               className="group flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border text-muted-foreground hover:border-primary/60 hover:text-foreground hover:bg-accent/10 transition-colors cursor-pointer h-full"
               aria-label="Add loader"
               title="Add loader"
@@ -652,14 +792,15 @@ export default function Sandbox() {
         </main>
 
         <aside
-          className={`font-mono flex flex-col bg-background
+          style={{ fontFamily: "var(--font-inter), system-ui, sans-serif" }}
+          className={`flex flex-col bg-zinc-900 md:bg-background
             md:static md:w-80 md:shrink-0 md:border-l md:h-auto md:max-h-none md:rounded-none md:translate-y-0 md:overflow-y-auto
             fixed inset-x-0 bottom-0 z-50 max-h-[60vh] rounded-t-xl border-t border-border overflow-y-auto
             transition-transform duration-300 ease-out
             ${settingsOpen ? "translate-y-0" : "translate-y-full md:translate-y-0"}`}
         >
-          <div className="flex items-center justify-between pl-4 pr-1 h-12 border-b sticky top-0 bg-background z-10">
-            <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Settings</h2>
+          <div className="flex items-center justify-between pl-4 pr-1 py-2 border-b sticky top-0 bg-zinc-900 md:bg-background z-10">
+            <h2 className="text-base font-normal tracking-tight text-foreground uppercase">Settings</h2>
             <button
               type="button"
               onClick={() => setSettingsOpen(false)}
@@ -844,10 +985,6 @@ export default function Sandbox() {
                   <Label className="mb-1.5 text-xs">Animation Style</Label>
                   <SelectField value={selected.style} onChange={(v) => update({ style: v as AnimStyle })} options={STYLES} />
                 </div>
-                <div>
-                  <Label className="mb-1.5 text-xs">Background Style</Label>
-                  <SelectField value={selected.bg} onChange={(v) => update({ bg: v as BgStyle })} options={BG_STYLES} />
-                </div>
               </div>
             </Section>
 
@@ -904,6 +1041,49 @@ export default function Sandbox() {
                         }
                       />
                     </div>
+                    {(selected.shimmer.mode === "shimmer" || selected.shimmer.mode === "shine") && (
+                      <div className="space-y-2">
+                        <Label className="text-xs">Text Effect Colors</Label>
+                        <ColorRow
+                          label="Base 50%"
+                          hex={selected.shimmer.base ?? selected.colors.text}
+                          expanded={expandedFxColor === "base"}
+                          onToggle={() => setExpandedFxColor(expandedFxColor === "base" ? null : "base")}
+                          onChange={(hex) => update({ shimmer: { ...selected.shimmer, base: hex } })}
+                        />
+                        <ColorRow
+                          label="Highlight"
+                          hex={selected.shimmer.highlight ?? selected.colors.text}
+                          expanded={expandedFxColor === "highlight"}
+                          onToggle={() => setExpandedFxColor(expandedFxColor === "highlight" ? null : "highlight")}
+                          onChange={(hex) => update({ shimmer: { ...selected.shimmer, highlight: hex } })}
+                        />
+                      </div>
+                    )}
+                    {selected.shimmer.mode === "gradient" && (
+                      <div className="space-y-2">
+                        <Label className="text-xs">Gradient Colors</Label>
+                        {([0, 1, 2] as const).map((i) => {
+                          const defaults: [string, string, string] = ["#6CB4FF", "#BD93F9", "#F5A3C7"];
+                          const stops = selected.shimmer.stops ?? defaults;
+                          const key = (`stop${i}`) as "stop0" | "stop1" | "stop2";
+                          return (
+                            <ColorRow
+                              key={key}
+                              label={`Color ${i + 1}`}
+                              hex={stops[i]}
+                              expanded={expandedFxColor === key}
+                              onToggle={() => setExpandedFxColor(expandedFxColor === key ? null : key)}
+                              onChange={(hex) => {
+                                const next: [string, string, string] = [...stops];
+                                next[i] = hex;
+                                update({ shimmer: { ...selected.shimmer, stops: next } });
+                              }}
+                            />
+                          );
+                        })}
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -1067,6 +1247,7 @@ function NumberField({
   return (
     <div className="inline-flex items-center gap-0.5">
       <input
+        suppressHydrationWarning
         type="text"
         inputMode="decimal"
         value={draft}

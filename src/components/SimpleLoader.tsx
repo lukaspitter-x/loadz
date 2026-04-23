@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { AnimStyle, BgStyle, CellShape, LoaderColors } from "@/lib/types";
+import type { AnimStyle, CellShape, LoaderColors } from "@/lib/types";
 import {
   CONSTELLATION_COUNT,
   MOLECULAR_SATELLITES,
@@ -38,6 +38,8 @@ import { ShapeNode } from "@/lib/simple-loader/shapes";
 
 const DEFAULT_SIZE = 12;
 const DEFAULT_PAD = 1;
+// Global tick-rate multiplier. 1 = configured fps, 2 = 2× faster, etc.
+const SPEED_MULTIPLIER = 2;
 
 export interface SimpleLoaderProps {
   displayText: string;
@@ -50,12 +52,11 @@ export interface SimpleLoaderProps {
     pattern: SimplePattern;
     style: AnimStyle;
     fps: number;
-    backgroundStyle: BgStyle;
   };
   colors: LoaderColors;
   transparentBg?: boolean;
   glow?: { enabled: boolean; size: number; intensity: number };
-  shimmer?: { enabled: boolean; speed: number; mode?: TextFxMode };
+  shimmer?: { enabled: boolean; speed: number; mode?: TextFxMode; base?: string; highlight?: string; stops?: [string, string, string] };
   paused?: boolean;
   dataId?: string;
   /**
@@ -78,7 +79,7 @@ export function SimpleLoader({
   grid = { size: 5 },
   cellShape = "rounded-rect",
   cellSizeFactor = 1,
-  animation = { pattern: "wave-diagonal", style: "pulse-size", fps: 24, backgroundStyle: "none" },
+  animation = { pattern: "wave-diagonal", style: "pulse-size", fps: 24 },
   colors,
   transparentBg,
   glow,
@@ -150,15 +151,16 @@ export function SimpleLoader({
   // before drawing cells) aren't blank on first paint.
   const tickRef = useRef(30);
 
-  // Paint one frame synchronously on every render that changes config —
-  // guarantees paused loaders show a real frame instead of unstyled cells.
+  // Paint one frame synchronously when config changes — guarantees paused
+  // loaders show a real frame instead of unstyled cells. Dep-gated so a
+  // parent re-render (slider drag, color picker, etc.) doesn't force a
+  // synchronous stepPattern on every loader.
   useLayoutEffect(() => {
     stepPattern({
       pattern,
       tick: tickRef.current,
       fps: animation.fps,
       style: animation.style,
-      bg: animation.backgroundStyle,
       size: effectiveSize,
       colors,
       cellShape,
@@ -170,42 +172,58 @@ export function SimpleLoader({
       pad: PAD,
       refs: { shapes: shapeRefs.current, edges: edgeRefs.current },
     });
-  });
+  }, [pattern, animation.fps, animation.style, effectiveSize, gridCells, colors, cellShape, scatterBound, AREA, PAD]);
 
   // Live pause ref so the rAF loop self-exits immediately on pause, even if the
   // effect cleanup hasn't run yet.
   const pausedRef = useRef(!!paused);
   pausedRef.current = !!paused;
 
-  // rAF loop
+  // rAF loop — wall-clock-gated so motion speed matches the configured fps
+  // regardless of the display's refresh rate or frame slip. Only calls
+  // stepPattern when tick actually advances, so paint work is bounded by fps.
   useEffect(() => {
     if (paused) return;
+    const targetMs = 1000 / Math.max(1, animation.fps * SPEED_MULTIPLIER);
     let raf = 0;
-    const loop = () => {
+    let last = performance.now();
+    let accum = 0;
+    const loop = (now: number) => {
       if (pausedRef.current) return;
-      tickRef.current++;
-      stepPattern({
-        pattern,
-        tick: tickRef.current,
-        fps: animation.fps,
-        style: animation.style,
-        bg: animation.backgroundStyle,
-        size: effectiveSize,
-        colors,
-        cellShape,
-        gridCells,
-        scatterState: scatterStateRef.current,
-        scatterBound,
-        constellationState: constellationStateRef.current,
-        area: AREA,
-        pad: PAD,
-        refs: { shapes: shapeRefs.current, edges: edgeRefs.current },
-      });
+      const dt = now - last;
+      last = now;
+      accum += dt;
+      // tab-switch / long jank guard — don't spiral catching up
+      if (accum > 500) accum = targetMs;
+      let advanced = false;
+      while (accum >= targetMs) {
+        tickRef.current++;
+        accum -= targetMs;
+        advanced = true;
+      }
+      if (advanced) {
+        stepPattern({
+          pattern,
+          tick: tickRef.current,
+          fps: animation.fps,
+          style: animation.style,
+          size: effectiveSize,
+          colors,
+          cellShape,
+          gridCells,
+          scatterState: scatterStateRef.current,
+          scatterBound,
+          constellationState: constellationStateRef.current,
+          area: AREA,
+          pad: PAD,
+          refs: { shapes: shapeRefs.current, edges: edgeRefs.current },
+        });
+      }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [pattern, animation.fps, animation.style, animation.backgroundStyle, effectiveSize, gridCells, colors, cellShape, paused]);
+  }, [pattern, animation.fps, animation.style, effectiveSize, gridCells, colors, cellShape, paused, scatterBound, AREA, PAD]);
 
   const isOffGrid =
     pattern === "scatter" ||
@@ -373,14 +391,15 @@ function TextLabel({
 }: {
   text: string;
   color: string;
-  shimmer?: { enabled: boolean; speed: number; mode?: TextFxMode };
+  shimmer?: { enabled: boolean; speed: number; mode?: TextFxMode; base?: string; highlight?: string; stops?: [string, string, string] };
 }) {
   if (!shimmer?.enabled) return <span>{text}</span>;
   const mode = shimmer.mode ?? "shimmer";
   if (mode === "cursor") {
     return <TypewriterLabel text={text} color={color} speed={shimmer.speed} />;
   }
-  return <span style={shimmerStyle(color, shimmer.speed, mode)}>{text}</span>;
+  const baseColor = shimmer.base || color;
+  return <span style={shimmerStyle(baseColor, shimmer.speed, mode, shimmer.highlight, shimmer.stops)}>{text}</span>;
 }
 
 function TypewriterLabel({ text, color, speed }: { text: string; color: string; speed: number }) {
@@ -425,8 +444,8 @@ function TypewriterLabel({ text, color, speed }: { text: string; color: string; 
 
   return (
     <span style={{ color, position: "relative", display: "inline-block", whiteSpace: "pre" }}>
-      {/* ghost reserves full width so the SVG to the left doesn't shift while typing */}
-      <span aria-hidden style={{ visibility: "hidden" }}>{text}</span>
+      {/* ghost reserves full width (+ caret gap/width) so the caret stays visible after the last char */}
+      <span aria-hidden style={{ visibility: "hidden", paddingRight: 4 }}>{text}</span>
       <span style={{ position: "absolute", inset: 0, display: "inline-flex", alignItems: "center", gap: 2, whiteSpace: "pre" }}>
         <span>{typed}</span>
         <span
@@ -757,9 +776,10 @@ function evalGridPattern(
     return { opacity: 0.05 + v * 0.95, scale: 0.25 + v * 0.75 };
   }
   if (pattern === "ascii-cycle") {
-    const glyphIdx = Math.floor(tick / 10) % ASCII_CYCLE_GLYPHS.length;
+    const adv = tick * rate / 10;
+    const glyphIdx = Math.floor(adv) % ASCII_CYCLE_GLYPHS.length;
     const glyph = ASCII_CYCLE_GLYPHS[glyphIdx];
-    const sub = (tick / 10) % 1;
+    const sub = adv % 1;
     const fadeIn = Math.min(1, sub * 3);
     const active = sampleGlyph(glyph, r, c, size);
     if (!active) return { opacity: 0.05, scale: 0.25 };
@@ -800,13 +820,10 @@ function evalGridPattern(
   // Fall through to existing grid patterns (wave-diagonal / expanding-pulse / staircase)
   const phaseT = gridPhaseT(pattern, r, c, size, t);
   const s = applyStyle(
-    // Only the three original grid patterns pass through here; AnimStyle irrelevant otherwise.
     "pulse-size",
     phaseT,
     primary,
     inactive,
-    "none",
-    tick,
   );
   return { opacity: s.opacity, scale: s.scale, color: s.fill };
 }
@@ -818,7 +835,6 @@ interface StepArgs {
   tick: number;
   fps: number;
   style: AnimStyle;
-  bg: BgStyle;
   size: number;
   area: number;
   pad: number;
@@ -838,7 +854,7 @@ function stepPattern(args: StepArgs) {
   const { pattern, tick, fps, colors, refs } = args;
 
   if (pattern === "node-graph") {
-    const { nodes, edges } = stepNodeGraph(tick, args.area);
+    const { nodes, edges } = stepNodeGraph(tick, args.area, fps);
     nodes.forEach((n, i) => {
       const el = refs.shapes[i];
       if (!el) return;
@@ -860,7 +876,7 @@ function stepPattern(args: StepArgs) {
     return;
   }
   if (pattern === "constellation") {
-    const { positions, edges } = stepConstellation(args.constellationState, args.area);
+    const { positions, edges } = stepConstellation(args.constellationState, args.area, fps);
     positions.forEach((p, i) => {
       const el = refs.shapes[i];
       if (!el) return;
@@ -883,7 +899,7 @@ function stepPattern(args: StepArgs) {
     return;
   }
   if (pattern === "network-pulse") {
-    const { nodes, edges } = stepNetworkPulse(tick);
+    const { nodes, edges } = stepNetworkPulse(tick, fps);
     const pts = pulseNodePositions(args.area);
     nodes.forEach((n, i) => {
       const el = refs.shapes[i];
@@ -903,7 +919,7 @@ function stepPattern(args: StepArgs) {
     return;
   }
   if (pattern === "molecular") {
-    const { center, satellites } = stepMolecular(tick, args.area);
+    const { center, satellites } = stepMolecular(tick, args.area, fps);
     const centerEl = refs.shapes[0];
     if (centerEl) {
       centerEl.setAttribute("transform", `translate(${args.pad + center.x} ${args.pad + center.y}) scale(${center.scale})`);
@@ -931,7 +947,7 @@ function stepPattern(args: StepArgs) {
     return;
   }
   if (pattern === "scatter") {
-    const positions = stepScatter(args.scatterState, tick, args.scatterBound);
+    const positions = stepScatter(args.scatterState, tick, args.scatterBound, fps);
     positions.forEach((p, i) => {
       const el = refs.shapes[i];
       if (!el) return;
@@ -951,16 +967,10 @@ function stepPattern(args: StepArgs) {
     let out: CellOut;
     if (gridOriginal) {
       const phaseT = gridPhaseT(pattern, cell.r, cell.c, args.size, t);
-      const s = applyStyle(args.style, phaseT, colors.primary, colors.inactiveCells, args.bg, tick);
+      const s = applyStyle(args.style, phaseT, colors.primary, colors.inactiveCells);
       out = { opacity: s.opacity, scale: s.scale, color: s.fill };
     } else {
       out = evalGridPattern(pattern, cell.r, cell.c, args.size, tick, fps, t, colors.primary, colors.inactiveCells);
-      // Breathe: lift the opacity floor of low-activity cells with a slow sine
-      // so inactive cells feel alive even on the new patterns.
-      if (args.bg === "breathe" && out.opacity < 0.3) {
-        const breatheFloor = 0.15 + Math.sin(tick * 0.03) * 0.05;
-        out.opacity = Math.max(out.opacity, breatheFloor);
-      }
     }
     // iOS Safari mis-renders CSS-transformed ancestors + SVG `transform`
     // attributes on descendants. Drive size with concrete geometry attrs
@@ -1058,9 +1068,17 @@ function ensureTextFxKeyframes() {
   document.head.appendChild(el);
 }
 
-function shimmerStyle(baseColor: string, speed: number, mode: Exclude<TextFxMode, "cursor">): React.CSSProperties {
+function shimmerStyle(
+  baseColor: string,
+  speed: number,
+  mode: Exclude<TextFxMode, "cursor">,
+  highlight?: string,
+  stops?: [string, string, string],
+): React.CSSProperties {
   ensureTextFxKeyframes();
   const duration = Math.max(0.4, 2.5 / Math.max(0.2, speed));
+  const peak = highlight || baseColor;
+  const g = stops ?? ["#6CB4FF", "#BD93F9", "#F5A3C7"];
   const common: React.CSSProperties = {
     display: "inline-block",
     backgroundSize: "300% 100%",
@@ -1070,42 +1088,41 @@ function shimmerStyle(baseColor: string, speed: number, mode: Exclude<TextFxMode
     color: "transparent",
   };
   if (mode === "shine") {
-    // dim base + bright pulse. Uses alpha so it works for any text color.
     return {
       ...common,
       backgroundImage: `linear-gradient(100deg,
-        ${baseColor}33 0%,
-        ${baseColor}33 44%,
-        ${baseColor} 50%,
-        ${baseColor}33 56%,
-        ${baseColor}33 100%)`,
+        ${baseColor}80 0%,
+        ${baseColor}80 44%,
+        ${peak} 50%,
+        ${baseColor}80 56%,
+        ${baseColor}80 100%)`,
       animation: `simple-shine ${duration * 1.4}s ease-in-out infinite`,
     };
   }
   if (mode === "gradient") {
-    // colorful multi-hue sweep (ChatGPT-ish)
     return {
       ...common,
       backgroundImage: `linear-gradient(90deg,
         ${baseColor} 0%,
-        #6CB4FF 20%,
-        #BD93F9 35%,
-        #F5A3C7 50%,
-        #BD93F9 65%,
-        #6CB4FF 80%,
+        ${baseColor} 33%,
+        ${g[0]} 40%,
+        ${g[1]} 45%,
+        ${g[2]} 50%,
+        ${g[1]} 55%,
+        ${g[0]} 60%,
+        ${baseColor} 67%,
         ${baseColor} 100%)`,
       animation: `simple-shimmer ${duration * 1.4}s linear infinite`,
     };
   }
-  // "shimmer" default — alpha-contrasted wave so it works on white text too
   return {
     ...common,
     backgroundImage: `linear-gradient(90deg,
-      ${baseColor}66 0%,
-      ${baseColor}66 30%,
-      ${baseColor} 50%,
-      ${baseColor}66 70%,
-      ${baseColor}66 100%)`,
+      ${baseColor}80 0%,
+      ${baseColor}80 30%,
+      ${peak} 50%,
+      ${baseColor}80 70%,
+      ${baseColor}80 100%)`,
     animation: `simple-shimmer ${duration}s linear infinite`,
   };
 }

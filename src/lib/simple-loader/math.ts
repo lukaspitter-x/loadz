@@ -1,4 +1,4 @@
-import type { AnimPattern, AnimStyle, BgStyle } from "../types";
+import type { AnimStyle } from "../types";
 
 export interface CellStyle {
   scale: number;
@@ -37,15 +37,12 @@ export function applyStyle(
   t: number,
   primary: string,
   inactive: string,
-  bg: BgStyle,
-  tick: number,
 ): CellStyle {
-  const bgT = bg === "breathe" ? 0.15 + Math.sin(tick * 0.03) * 0.05 : 0.15;
   switch (style) {
     case "pulse-size":
       return { scale: 0.35 + t * 0.8, opacity: 0.25 + t * 0.75, fill: primary };
     case "pulse-opacity":
-      return { scale: 0.9, opacity: Math.max(bgT, t), fill: primary };
+      return { scale: 0.9, opacity: Math.max(0.15, t), fill: primary };
     case "pulse-color":
       return { scale: 0.9, opacity: 1, fill: blendColor(inactive, primary, t) };
   }
@@ -98,17 +95,23 @@ export function makeScatterCells(count: number, area: number): ScatterCell[] {
   return out;
 }
 
+export function fpsRate(fps: number): number {
+  return Math.max(6, Math.min(60, fps)) / 24;
+}
+
 export function stepScatter(
   cells: ScatterCell[],
   tick: number,
   bound: number,
+  fps: number = 24,
 ): { x: number; y: number; opacity: number }[] {
+  const rate = fpsRate(fps);
   return cells.map((cell) => {
-    cell.ox += cell.vx;
-    cell.oy += cell.vy;
+    cell.ox += cell.vx * rate;
+    cell.oy += cell.vy * rate;
     if (Math.abs(cell.ox) > bound) cell.vx = -cell.vx;
     if (Math.abs(cell.oy) > bound) cell.vy = -cell.vy;
-    const pulse = (Math.sin(tick * 0.05 + cell.baseX * 0.02) + 1) / 2;
+    const pulse = (Math.sin(tick * 0.05 * rate + cell.baseX * 0.02) + 1) / 2;
     return {
       x: cell.baseX + cell.ox,
       y: cell.baseY + cell.oy,
@@ -136,11 +139,12 @@ export const NODE_EDGES: [number, number][] = [
 export function stepNodeGraph(
   tick: number,
   area: number,
+  fps: number = 24,
 ): {
   nodes: { x: number; y: number; scale: number; opacity: number }[];
   edges: number[];
 } {
-  const t = tick * 0.04;
+  const t = tick * 0.04 * fpsRate(fps);
   // Small elliptical drift around each base position; ~6% of the area.
   const driftA = area * 0.05;
   const driftB = area * 0.07;
@@ -187,13 +191,15 @@ export function makeConstellation(area: number): ConstellationNode[] {
 export function stepConstellation(
   nodes: ConstellationNode[],
   area: number,
+  fps: number = 24,
 ): {
   positions: { x: number; y: number }[];
   edges: { a: number; b: number; alpha: number }[];
 } {
+  const rate = fpsRate(fps);
   nodes.forEach((n) => {
-    n.x += n.vx;
-    n.y += n.vy;
+    n.x += n.vx * rate;
+    n.y += n.vy * rate;
     if (n.x < 0 || n.x > area) { n.vx = -n.vx; n.x = Math.max(0, Math.min(area, n.x)); }
     if (n.y < 0 || n.y > area) { n.vy = -n.vy; n.y = Math.max(0, Math.min(area, n.y)); }
   });
@@ -227,12 +233,12 @@ export function pulseNodePositions(area: number): { x: number; y: number }[] {
   return out;
 }
 
-export function stepNetworkPulse(tick: number): {
+export function stepNetworkPulse(tick: number, fps: number = 24): {
   nodes: { scale: number; opacity: number }[];
   edges: number[]; // alpha for each consecutive-pair edge (N edges, closing ring)
 } {
   const count = PULSE_NODE_COUNT;
-  const packet = (tick * 0.06) % count; // float position along ring
+  const packet = (tick * 0.06 * fpsRate(fps)) % count; // float position along ring
   const nodes = [];
   for (let i = 0; i < count; i++) {
     // Distance around ring (shortest direction)
@@ -257,13 +263,13 @@ export function stepNetworkPulse(tick: number): {
 
 export const MOLECULAR_SATELLITES = 3;
 
-export function stepMolecular(tick: number, area: number): {
+export function stepMolecular(tick: number, area: number, fps: number = 24): {
   center: { x: number; y: number; scale: number; opacity: number };
   satellites: { x: number; y: number; scale: number; opacity: number }[];
 } {
   const cx = area / 2;
   const cy = area / 2;
-  const t = tick * 0.05;
+  const t = tick * 0.05 * fpsRate(fps);
   const radii = [area * 0.2, area * 0.33, area * 0.45];
   const speeds = [1.1, -0.75, 0.5];
   const phases = [0, 2.1, 4.3];

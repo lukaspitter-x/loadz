@@ -1,4 +1,4 @@
-import type { AnimStyle, BgStyle, CellShape, LoaderColors } from "@/lib/types";
+import type { AnimStyle, CellShape, LoaderColors } from "@/lib/types";
 import type { SimplePattern } from "../patterns";
 import { REACT_TEMPLATE, CONFIG_MARKER } from "./react-template";
 
@@ -13,12 +13,11 @@ export interface PortableConfig {
     pattern: SimplePattern;
     style: AnimStyle;
     fps: number;
-    backgroundStyle: BgStyle;
   };
   colors: LoaderColors;
   transparentBg: boolean;
   glow: { enabled: boolean; size: number; intensity: number };
-  shimmer: { enabled: boolean; speed: number; mode: "shimmer" | "shine" | "gradient" | "cursor" };
+  shimmer: { enabled: boolean; speed: number; mode: "shimmer" | "shine" | "gradient" | "cursor"; base?: string; highlight?: string; stops?: [string, string, string] };
 }
 
 // Sandbox Instance shape — kept loose to avoid circular type imports.
@@ -28,7 +27,6 @@ interface Instance {
   pattern: SimplePattern;
   style: AnimStyle;
   shape: CellShape;
-  bg: BgStyle;
   fps: number;
   size: number;
   padding: number;
@@ -37,7 +35,7 @@ interface Instance {
   colors: LoaderColors;
   transparentBg: boolean;
   glow: { enabled: boolean; size: number; intensity: number };
-  shimmer: { enabled: boolean; speed: number; mode: "shimmer" | "shine" | "gradient" | "cursor" };
+  shimmer: { enabled: boolean; speed: number; mode: "shimmer" | "shine" | "gradient" | "cursor"; base?: string; highlight?: string; stops?: [string, string, string] };
 }
 
 export function instanceToConfig(inst: Instance): PortableConfig {
@@ -52,7 +50,6 @@ export function instanceToConfig(inst: Instance): PortableConfig {
       pattern: inst.pattern,
       style: inst.style,
       fps: inst.fps,
-      backgroundStyle: inst.bg,
     },
     colors: inst.colors,
     transparentBg: inst.transparentBg,
