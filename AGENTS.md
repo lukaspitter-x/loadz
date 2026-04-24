@@ -89,10 +89,13 @@ The settings panel is split into two labelled groups. The distinction is load-be
 npm run dev          # start dev server on :3000
 npx tsc --noEmit     # strict typecheck (no test suite in this repo)
 npm run build        # prod build (set NEXT_OUTPUT=export for a static bundle)
-npm run deploy:cf    # deploy to Cloudflare Workers via OpenNext (config in wrangler.jsonc)
+npm run build:cf     # OpenNext build for Cloudflare (writes .open-next/)
+npm run deploy:cf    # deploy .open-next/ to Cloudflare Workers (config in wrangler.jsonc)
 ```
 
 Production deploy: https://loadz.aaxx24.cc
+
+> **Always run `npm run build:cf` immediately before `npm run deploy:cf`.** `deploy:cf` only uploads the existing `.open-next/` artifact — it does **not** trigger a build. Skipping the build ships whatever was bundled on the previous run and silently strips any code you've changed since.
 
 ## When editing `SimpleLoader.tsx`
 
