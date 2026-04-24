@@ -33,12 +33,16 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} dark h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col">{children}</body>
-      <script
-        defer
-        src="https://static.cloudflareinsights.com/beacon.min.js"
-        data-cf-beacon='{"token": "b78ef8f14c5740aa806b5bd55afd5ffc"}'
-      />
+      <body className="min-h-full flex flex-col">
+        {children}
+        {process.env.NODE_ENV === "production" && (
+          <script
+            defer
+            src="https://static.cloudflareinsights.com/beacon.min.js"
+            data-cf-beacon='{"token": "b78ef8f14c5740aa806b5bd55afd5ffc"}'
+          />
+        )}
+      </body>
     </html>
   );
 }

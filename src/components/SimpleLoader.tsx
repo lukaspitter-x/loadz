@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { AnimStyle, CellShape, LoaderColors } from "@/lib/types";
+import type { AnimStyle, CellShape, GridType, LoaderColors } from "@/lib/types";
 import {
   CONSTELLATION_COUNT,
   MOLECULAR_SATELLITES,
@@ -35,6 +35,7 @@ import {
   sampleGlyph,
 } from "@/lib/simple-loader/glyphs";
 import { ShapeNode } from "@/lib/simple-loader/shapes";
+import type { TriangularTessellation } from "@/lib/types";
 
 const DEFAULT_SIZE = 12;
 const DEFAULT_PAD = 1;
@@ -46,6 +47,8 @@ export interface SimpleLoaderProps {
   size?: number;     // total loader dimension in px (e.g. 12, 16, 24…). Should be divisible by 4.
   padding?: number;  // inner padding (on each side). Clamped so inner area stays > 0.
   grid?: { size: number };
+  gridType?: GridType;
+  triangularTessellation?: TriangularTessellation;
   cellShape?: CellShape;
   cellSizeFactor?: number; // 0.3 .. 1.5, multiplies the grid pitch
   animation?: {
@@ -70,13 +73,15 @@ export interface SimpleLoaderProps {
 
 export type TextFxMode = "shimmer" | "shine" | "gradient" | "cursor";
 
-type GridCell = { r: number; c: number; cx: number; cy: number };
+type GridCell = { r: number; c: number; cx: number; cy: number; shape?: CellShape };
 
 export function SimpleLoader({
   displayText,
   size: sizeProp = DEFAULT_SIZE,
   padding: paddingProp = DEFAULT_PAD,
   grid = { size: 5 },
+  gridType = "square",
+  triangularTessellation = "rows",
   cellShape = "rounded-rect",
   cellSizeFactor = 1,
   animation = { pattern: "wave-diagonal", style: "pulse-size", fps: 24 },
@@ -116,10 +121,66 @@ export function SimpleLoader({
   // Status-glyph patterns always render on a 5×5 grid so the pixel glyphs read correctly.
   const isStatus = pattern === "success" || pattern === "error" || pattern === "warning";
   const effectiveSize = isStatus ? 5 : grid.size;
+  // Status glyphs are bitmaps designed for a square lattice; forcing a triangular
+  // tessellation would mangle them, so keep status patterns on the square grid.
+  const effectiveGridType: GridType = isStatus ? "square" : gridType;
 
   const gridCells = useMemo<{ cells: GridCell[]; cellSize: number }>(() => {
-    const pitch = AREA / effectiveSize;
     const cells: GridCell[] = [];
+    const pitch = AREA / effectiveSize;
+    if (effectiveGridType === "triangular") {
+      if (triangularTessellation !== "rows") {
+        // Square grid where each cell is split along a diagonal into two
+        // independent right-triangle cells, each with its own centroid so
+        // patterns animate them as distinct cells. Logical column indices are
+        // doubled so each triangle is a distinct cell for patterns that key
+        // off c.
+        // Offset from each square's center to the incenter of its half-triangle.
+        // Matches the incenter-anchored vertex math in polyPointsFor.
+        const off = (pitch * (Math.SQRT2 - 1)) / 2;
+        for (let r = 0; r < effectiveSize; r++) {
+          for (let c = 0; c < effectiveSize; c++) {
+            const sqCx = PAD + (c + 0.5) * pitch;
+            const sqCy = PAD + (r + 0.5) * pitch;
+            const useBLTR =
+              triangularTessellation === "diagonal-bl-tr" ||
+              (triangularTessellation === "diagonal-switch" && (r + c) % 2 === 0);
+            if (useBLTR) {
+              // ↘ split: triangles occupy BL + TR corners.
+              cells.push({ r, c: 2 * c, cx: sqCx + off, cy: sqCy - off, shape: "triangle-ur" });
+              cells.push({ r, c: 2 * c + 1, cx: sqCx - off, cy: sqCy + off, shape: "triangle-dl" });
+            } else {
+              // ↗ split: triangles occupy TL + BR corners.
+              cells.push({ r, c: 2 * c, cx: sqCx - off, cy: sqCy - off, shape: "triangle-ul" });
+              cells.push({ r, c: 2 * c + 1, cx: sqCx + off, cy: sqCy + off, shape: "triangle-dr" });
+            }
+          }
+        }
+        return { cells, cellSize: pitch * cellSizeFactor };
+      }
+      // "rows": classic triangular strip tessellation — N rows of (2N − 1)
+      // triangles alternating up/down, sharing full edges. Triangles are
+      // isoceles (NOT equilateral) with base = pitch and height = pitch so the
+      // tessellation fills the square AREA exactly.
+      const edge = pitch;
+      const rowH = pitch;
+      for (let r = 0; r < effectiveSize; r++) {
+        const rowTop = PAD + r * rowH;
+        const trianglesInRow = 2 * effectiveSize - 1;
+        // Flip every second row so adjacent rows interlock: an up-triangle in
+        // row r sits above a down-triangle at the same k in row r+1, sharing
+        // a full base edge → forms a diamond. Without the flip, rows would be
+        // identical strips with no inter-row shape relationship.
+        const flipped = r % 2 === 1;
+        for (let k = 0; k < trianglesInRow; k++) {
+          const up = flipped ? k % 2 !== 0 : k % 2 === 0;
+          const cx = PAD + ((k + 1) * edge) / 2;
+          const cy = rowTop + (up ? 2 / 3 : 1 / 3) * rowH;
+          cells.push({ r, c: k, cx, cy, shape: up ? "triangle-up" : "triangle-down" });
+        }
+      }
+      return { cells, cellSize: pitch * cellSizeFactor };
+    }
     for (let r = 0; r < effectiveSize; r++) {
       for (let c = 0; c < effectiveSize; c++) {
         cells.push({
@@ -131,7 +192,7 @@ export function SimpleLoader({
       }
     }
     return { cells, cellSize: pitch * cellSizeFactor };
-  }, [effectiveSize, cellSizeFactor, AREA, PAD]);
+  }, [effectiveSize, effectiveGridType, triangularTessellation, cellSizeFactor, AREA, PAD]);
 
   const scatterStateRef = useRef<ScatterCell[]>([]);
   const constellationStateRef = useRef<ConstellationNode[]>([]);
@@ -358,16 +419,19 @@ export function SimpleLoader({
               </g>
             ))}
           {!isOffGrid &&
-            gridCells.cells.map((cell, i) => (
-              <ShapeNode
-                key={`${cellShape}-${effectiveSize}-${i}`}
-                shape={cellShape}
-                cx={cell.cx}
-                cy={cell.cy}
-                size={gridCells.cellSize}
-                nodeRef={(el) => { shapeRefs.current[i] = el; }}
-              />
-            ))}
+            gridCells.cells.map((cell, i) => {
+              const shape = cell.shape ?? cellShape;
+              return (
+                <ShapeNode
+                  key={`${effectiveGridType}-${shape}-${effectiveSize}-${i}`}
+                  shape={shape}
+                  cx={cell.cx}
+                  cy={cell.cy}
+                  size={gridCells.cellSize}
+                  nodeRef={(el) => { shapeRefs.current[i] = el; }}
+                />
+              );
+            })}
         </g>
       </svg>
       </span>
@@ -481,6 +545,11 @@ function evalGridPattern(
   t: number,
   primary: string,
   inactive: string,
+  // Geometric cell coords in "grid units" (same scale as r/c). For a square
+  // grid these equal (c, r). For triangular, they're the cell centroid mapped
+  // into [0, size-1] space so distance/angle patterns stay coherent.
+  gx: number = c,
+  gy: number = r,
 ): CellOut {
   const center = (size - 1) / 2;
   const rate = Math.max(6, Math.min(60, fps)) / 24;
@@ -490,18 +559,18 @@ function evalGridPattern(
     const ang = tick * 0.12 * rate;
     const hr = center + Math.sin(ang) * radius;
     const hc = center + Math.cos(ang) * radius;
-    const d = Math.hypot(r - hr, c - hc);
+    const d = Math.hypot(gy - hr, gx - hc);
     const v = Math.max(0, 1 - d / 1.3);
     return { opacity: 0.12 + v * 0.88, scale: 0.45 + v * 0.55 };
   }
   if (pattern === "ring") {
-    const dist = Math.hypot(r - center, c - center);
+    const dist = Math.hypot(gy - center, gx - center);
     const targetDist = (size - 1) / 2 - 0.2;
     const onRing = Math.abs(dist - targetDist) < 0.75;
     if (!onRing) return { opacity: 0.08, scale: 0.3 };
-    const cellAng = Math.atan2(r - center, c - center);
+    const cellAng = Math.atan2(gy - center, gx - center);
     const headAng = tick * 0.12 * rate;
-    let delta = ((headAng - cellAng) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+    const delta = ((headAng - cellAng) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
     const tail = Math.max(0, 1 - delta / (Math.PI * 1.2));
     return { opacity: 0.15 + tail * 0.85, scale: 0.55 + tail * 0.45 };
   }
@@ -512,7 +581,10 @@ function evalGridPattern(
     const step = Math.max(1, Math.floor(size / 3));
     const centerCol = Math.round(center);
     const dotCols = [centerCol - step, centerCol, centerCol + step];
-    const idx = dotCols.indexOf(c);
+    let idx = -1;
+    for (let i = 0; i < dotCols.length; i++) {
+      if (Math.abs(gx - dotCols[i]) < 0.75) { idx = i; break; }
+    }
     if (idx < 0) return { opacity: 0, scale: 0 };
     const phase = tick * 0.12 - idx * 0.9;
     const v = (Math.sin(phase) + 1) / 2;
@@ -521,7 +593,7 @@ function evalGridPattern(
   if (pattern === "dot-wave") {
     // Sine-displaced row of dots traveling across
     const midR = Math.round(center);
-    const phase = tick * 0.15 * rate - c * 0.65;
+    const phase = tick * 0.15 * rate - gx * 0.65;
     const rowOffset = Math.round(Math.sin(phase) * center * 0.7);
     const activeR = midR + rowOffset;
     if (r === activeR) return { opacity: 1, scale: 1 };
@@ -531,7 +603,7 @@ function evalGridPattern(
   if (pattern === "cardio") {
     // ECG sweep: head pulses bright, QRS trace trails behind with thick line and fading tail.
     const sweep = (tick * 0.1 * rate) % (size + 3);
-    const dx = sweep - c; // >0 = already passed, <0 = ahead of head
+    const dx = sweep - gx; // >0 = already passed, <0 = ahead of head
     const midR = Math.round(center);
     const amp = center * 0.95; // full vertical range
 
@@ -570,7 +642,7 @@ function evalGridPattern(
     return { opacity: 0, scale: 0 };
   }
   if (pattern === "waveform") {
-    const amp = (Math.sin(tick * 0.18 * rate - c * 0.55) + 1) / 2;
+    const amp = (Math.sin(tick * 0.18 * rate - gx * 0.55) + 1) / 2;
     const halfHeight = amp * (center + 0.3);
     const distFromMid = Math.abs(r - center);
     const active = distFromMid <= halfHeight;
@@ -581,27 +653,26 @@ function evalGridPattern(
     };
   }
   if (pattern === "ripples") {
-    const dist = Math.hypot(r - center, c - center);
+    const dist = Math.hypot(gy - center, gx - center);
     const wave = (Math.sin(tick * 0.15 * rate - dist * 1.4) + 1) / 2;
     return { opacity: 0.15 + wave * 0.85, scale: 0.5 + wave * 0.5 };
   }
   // ---------- Physics ----------
   if (pattern === "bouncing-ball") {
-    const midC = Math.round(center);
     const t = tick * 0.12 * rate;
     // |sin| gives bouncing motion: 0 at ground, 1 at apex.
     const h = Math.abs(Math.sin(t));
-    const ballR = (size - 1) * (1 - h); // row position
-    const d = Math.abs(r - ballR);
-    const onBall = c === midC && d < 0.9;
-    // Squash near ground (h low): widen ball horizontally.
+    const ballY = (size - 1) * (1 - h); // in gy units
+    // Use visual coords (gx, gy) so triangular tessellations render a coherent
+    // ball — cells in the same logical row r can sit at different visual y.
+    const onBall = Math.abs(gy - ballY) < 0.6 && Math.abs(gx - center) < 0.75;
+    const onGround = Math.abs(gy - (size - 1)) < 0.5;
     const squash = h < 0.15 ? (1 - h / 0.15) : 0;
-    if (r === size - 1 && Math.abs(c - midC) < 1 + squash * 1.5 && squash > 0.1) {
+    if (onGround && Math.abs(gx - center) < 1 + squash * 1.5 && squash > 0.1) {
       return { opacity: 0.4 + squash * 0.6, scale: 0.6 + squash * 0.4 };
     }
     if (onBall) return { opacity: 1, scale: 1 };
-    // Faint shadow at ground
-    if (r === size - 1 && c === midC) return { opacity: 0.15, scale: 0.4 };
+    if (onGround && Math.abs(gx - center) < 0.75) return { opacity: 0.15, scale: 0.4 };
     return { opacity: 0, scale: 0 };
   }
   if (pattern === "pendulum") {
@@ -609,13 +680,12 @@ function evalGridPattern(
     const t = tick * 0.1 * rate;
     const swing = Math.sin(t); // -1..1
     const ballC = center + swing * center * 0.9;
-    const ballCi = Math.round(ballC);
     // Small vertical arc — dips lower at endpoints
     const arcY = Math.abs(swing);
     const ballR = Math.round(midR + arcY * center * 0.3);
-    if (r === ballR && c === ballCi) return { opacity: 1, scale: 1 };
+    if (r === ballR && Math.abs(gx - ballC) < 0.75) return { opacity: 1, scale: 1 };
     // Pivot string: short vertical line from top-center to ball
-    if (c === Math.round(center) && r < ballR && r <= midR) {
+    if (Math.abs(gx - Math.round(center)) < 0.75 && r < ballR && r <= midR) {
       return { opacity: 0.12, scale: 0.3 };
     }
     return { opacity: 0, scale: 0 };
@@ -628,7 +698,7 @@ function evalGridPattern(
     const raw = Math.sin(t);
     const stretch = raw * raw; // 0..1, squared gives faster return
     const halfWidth = 0.6 + stretch * center * 0.95;
-    const d = Math.abs(c - center);
+    const d = Math.abs(gx - center);
     if (d < halfWidth) {
       const edgeT = Math.max(0, 1 - d / halfWidth);
       return { opacity: 0.3 + edgeT * 0.7, scale: 0.6 + edgeT * 0.4 };
@@ -638,8 +708,8 @@ function evalGridPattern(
   // ---------- Path ----------
   if (pattern === "spiral") {
     // Activate cells in a spiral order: innermost first, winding outward.
-    const cellAngle = Math.atan2(r - center, c - center);
-    const dist = Math.hypot(r - center, c - center);
+    const cellAngle = Math.atan2(gy - center, gx - center);
+    const dist = Math.hypot(gy - center, gx - center);
     const maxDist = Math.hypot(center, center);
     // Order = radius + small angular offset; head sweeps through this linearly.
     const orderIdx = dist + (cellAngle + Math.PI) / (Math.PI * 2) * 0.7;
@@ -651,21 +721,31 @@ function evalGridPattern(
     return { opacity: 0.15 + fade * 0.85, scale: 0.4 + fade * 0.6 };
   }
   if (pattern === "snake") {
-    // Perimeter cells traversed clockwise from top-left. Snake has a head + 3-cell tail.
-    const perim: [number, number][] = [];
-    for (let cc = 0; cc < size; cc++) perim.push([0, cc]);
-    for (let rr = 1; rr < size; rr++) perim.push([rr, size - 1]);
-    for (let cc = size - 2; cc >= 0; cc--) perim.push([size - 1, cc]);
-    for (let rr = size - 2; rr > 0; rr--) perim.push([rr, 0]);
-    const pLen = perim.length;
-    const head = Math.floor(tick * 0.2 * rate) % pLen;
-    const tailLen = 4;
-    for (let k = 0; k < tailLen; k++) {
-      const idx = ((head - k) % pLen + pLen) % pLen;
-      if (perim[idx][0] === r && perim[idx][1] === c) {
-        const t = 1 - k / tailLen;
-        return { opacity: 0.25 + t * 0.75, scale: 0.55 + t * 0.45 };
-      }
+    // Perimeter traversed clockwise from top-left. Uses visual coords (gx, gy)
+    // so triangular tessellations trace the actual outer edge of the grid
+    // rather than matching logical (r, c) cells that may no longer lie on the
+    // visual boundary.
+    const edge = size - 1;
+    const onTop = Math.abs(gy - 0) < 0.5;
+    const onRight = Math.abs(gx - edge) < 0.5;
+    const onBottom = Math.abs(gy - edge) < 0.5;
+    const onLeft = Math.abs(gx - 0) < 0.5;
+    if (!(onTop || onRight || onBottom || onLeft)) return { opacity: 0.04, scale: 0.2 };
+    // Map position to a clockwise perimeter coordinate t ∈ [0, 4*edge).
+    // Corner cells pick the side they hit first in clockwise order.
+    let tPerim = -1;
+    if (onTop) tPerim = Math.max(0, gx);
+    else if (onRight) tPerim = edge + Math.max(0, gy);
+    else if (onBottom) tPerim = 2 * edge + Math.max(0, edge - gx);
+    else if (onLeft) tPerim = 3 * edge + Math.max(0, edge - gy);
+    const pLen = 4 * edge;
+    const headT = (tick * 0.2 * rate) % pLen;
+    // Distance from head along the perimeter (backwards = tail trailing head).
+    let diff = (headT - tPerim + pLen) % pLen;
+    const tailLen = Math.max(2, Math.min(5, edge)); // scale tail with grid size
+    if (diff < tailLen) {
+      const fade = 1 - diff / tailLen;
+      return { opacity: 0.25 + fade * 0.75, scale: 0.55 + fade * 0.45 };
     }
     return { opacity: 0.04, scale: 0.2 };
   }
@@ -704,7 +784,7 @@ function evalGridPattern(
   if (pattern === "breath") {
     // Whole grid pulses in coordinated slow breath, with slight radial phase for depth.
     const t = tick * 0.05 * rate;
-    const dist = Math.hypot(r - center, c - center);
+    const dist = Math.hypot(gy - center, gx - center);
     const phase = t - dist * 0.25;
     const raw = (Math.sin(phase) + 1) / 2;
     const eased = raw * raw * (3 - 2 * raw);
@@ -712,28 +792,33 @@ function evalGridPattern(
   }
   // ---------- Tech ----------
   if (pattern === "progress-bar") {
-    const midR = Math.round(center);
     const t = tick * 0.08 * rate;
-    const cycle = t % 2; // 0..2
+    const cycle = t % 2;
     const dir = cycle < 1 ? cycle : 2 - cycle; // 0..1 triangle
     const barWidth = size * 0.45;
-    const barCenter = dir * (size - barWidth) + barWidth / 2;
-    const d = Math.abs(c - barCenter);
-    if (r !== midR) {
-      // Rail on neighbor rows
-      if (Math.abs(r - midR) === 1) return { opacity: 0.06, scale: 0.2 };
+    // Swing the bar so its center travels from barWidth/2 to (size-1)-barWidth/2.
+    // That's symmetric about the grid center (size-1)/2 and has the bar's edges
+    // just reaching gx=0 and gx=size-1 at the extremes — full width, centered.
+    const barCenter = dir * ((size - 1) - barWidth) + barWidth / 2;
+    // Visual-row membership via gy so triangular tessellations (where cells in
+    // the same logical row sit at two different visual heights) still render a
+    // clean horizontal bar.
+    const dy = Math.abs(gy - center);
+    if (dy > 0.5) {
+      if (dy > 0.7 && dy < 1.3) return { opacity: 0.06, scale: 0.2 }; // rail row
       return { opacity: 0, scale: 0 };
     }
+    const d = Math.abs(gx - barCenter);
     if (d < barWidth / 2) {
       const edgeT = Math.max(0, 1 - d / (barWidth / 2));
       return { opacity: 0.4 + edgeT * 0.6, scale: 0.7 + edgeT * 0.3 };
     }
-    return { opacity: 0.1, scale: 0.3 }; // dim rail
+    return { opacity: 0.1, scale: 0.3 }; // dim rail under the bar's row
   }
   if (pattern === "scan-line") {
     const t = tick * 0.14 * rate;
     const sweep = t % (size + 2);
-    const d = Math.abs(c - sweep);
+    const d = Math.abs(gx - sweep);
     if (d < 0.6) return { opacity: 1, scale: 0.95 };
     if (d < 1.8) return { opacity: 0.15 + (1.8 - d) * 0.45, scale: 0.4 + (1.8 - d) * 0.25 };
     return { opacity: 0.04, scale: 0.2 };
@@ -781,7 +866,7 @@ function evalGridPattern(
     const glyph = ASCII_CYCLE_GLYPHS[glyphIdx];
     const sub = adv % 1;
     const fadeIn = Math.min(1, sub * 3);
-    const active = sampleGlyph(glyph, r, c, size);
+    const active = sampleGlyph(glyph, r, gx, size);
     if (!active) return { opacity: 0.05, scale: 0.25 };
     return { opacity: 0.2 + fadeIn * 0.8, scale: 0.5 + fadeIn * 0.5 };
   }
@@ -964,20 +1049,41 @@ function stepPattern(args: StepArgs) {
   args.gridCells.cells.forEach((cell, i) => {
     const el = refs.shapes[i];
     if (!el) return;
+    // Geometric grid coords: equal to (c, r) on a square grid; derived from the
+    // centroid on triangular grids so distance/angle-based patterns are coherent.
+    const gx = args.area > 0 ? ((cell.cx - args.pad) / args.area) * args.size - 0.5 : cell.c;
+    const gy = args.area > 0 ? ((cell.cy - args.pad) / args.area) * args.size - 0.5 : cell.r;
     let out: CellOut;
     if (gridOriginal) {
-      const phaseT = gridPhaseT(pattern, cell.r, cell.c, args.size, t);
-      const s = applyStyle(args.style, phaseT, colors.primary, colors.inactiveCells);
-      out = { opacity: s.opacity, scale: s.scale, color: s.fill };
+      if (pattern === "expanding-pulse") {
+        // Use geometric coords so radial wave stays circular on triangular grids.
+        const cen = (args.size - 1) / 2;
+        const offset = Math.sqrt((gy - cen) ** 2 + (gx - cen) ** 2) * 0.6;
+        const phaseT = (Math.sin(t - offset) + 1) / 2;
+        const s = applyStyle(args.style, phaseT, colors.primary, colors.inactiveCells);
+        out = { opacity: s.opacity, scale: s.scale, color: s.fill };
+      } else if (pattern === "staircase") {
+        // Active anti-diagonal front = cells with (gx + gy) near `step`. Using
+        // visual coords (not logical r/c) makes the diagonal read correctly on
+        // triangular tessellations where (r, c) aren't square-lattice indices.
+        const step = Math.floor(t * 2) % (2 * args.size - 1);
+        const phaseT = Math.abs((gx + gy) - step) < 0.5 ? 1 : 0.15;
+        const s = applyStyle(args.style, phaseT, colors.primary, colors.inactiveCells);
+        out = { opacity: s.opacity, scale: s.scale, color: s.fill };
+      } else {
+        const phaseT = gridPhaseT(pattern, cell.r, cell.c, args.size, t);
+        const s = applyStyle(args.style, phaseT, colors.primary, colors.inactiveCells);
+        out = { opacity: s.opacity, scale: s.scale, color: s.fill };
+      }
     } else {
-      out = evalGridPattern(pattern, cell.r, cell.c, args.size, tick, fps, t, colors.primary, colors.inactiveCells);
+      out = evalGridPattern(pattern, cell.r, cell.c, args.size, tick, fps, t, colors.primary, colors.inactiveCells, gx, gy);
     }
     // iOS Safari mis-renders CSS-transformed ancestors + SVG `transform`
     // attributes on descendants. Drive size with concrete geometry attrs
     // instead of transforms — works on every SVG renderer.
     const baseSize = args.gridCells.cellSize;
     const drawn = baseSize * out.scale;
-    writeCellGeometry(el, args.cellShape, cell.cx, cell.cy, drawn);
+    writeCellGeometry(el, cell.shape ?? args.cellShape, cell.cx, cell.cy, drawn);
     el.style.opacity = String(out.opacity);
     // For patterns that don't set their own color, blend inactive → primary by activity
     // so the inactiveCells color actually shows on dim/off cells.
@@ -1017,6 +1123,30 @@ function writeCellGeometry(
 
 function polyPointsFor(shape: CellShape, cx: number, cy: number, size: number): string {
   const r = size / 2;
+  if (shape === "triangle-up" || shape === "triangle-down") {
+    const apexDist = (2 * size) / 3;
+    const baseDist = size / 3;
+    const halfBase = size / 2;
+    if (shape === "triangle-up") {
+      return `${cx},${cy - apexDist} ${cx + halfBase},${cy + baseDist} ${cx - halfBase},${cy + baseDist}`;
+    }
+    return `${cx - halfBase},${cy - baseDist} ${cx + halfBase},${cy - baseDist} ${cx},${cy + apexDist}`;
+  }
+  if (shape === "triangle-ur" || shape === "triangle-dl" || shape === "triangle-ul" || shape === "triangle-dr") {
+    // Incenter-anchored (see shapes.tsx for rationale).
+    const apex = size * Math.SQRT1_2;
+    const inset = size - apex;
+    if (shape === "triangle-ur") {
+      return `${cx - apex},${cy - inset} ${cx + inset},${cy - inset} ${cx + inset},${cy + apex}`;
+    }
+    if (shape === "triangle-dl") {
+      return `${cx - inset},${cy - apex} ${cx + apex},${cy + inset} ${cx - inset},${cy + inset}`;
+    }
+    if (shape === "triangle-ul") {
+      return `${cx - inset},${cy - inset} ${cx + apex},${cy - inset} ${cx - inset},${cy + apex}`;
+    }
+    return `${cx + inset},${cy - apex} ${cx + inset},${cy + inset} ${cx - apex},${cy + inset}`;
+  }
   if (shape === "diamond") {
     return `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`;
   }

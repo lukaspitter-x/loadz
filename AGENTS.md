@@ -24,7 +24,7 @@ src/
 │   ├── ExportModal.tsx     JSON / React / HTML / SVG / PNG export
 │   └── ui/                 shadcn primitives (button, input, select, slider, switch, ...)
 └── lib/
-    ├── types.ts            CellShape, AnimStyle, LoaderColors (+ CELL_SHAPES, STYLES)
+    ├── types.ts            CellShape, AnimStyle, LoaderColors, GridType, TriangularTessellation (+ CELL_SHAPES, STYLES, GRID_TYPES, TRIANGULAR_TESSELLATIONS)
     ├── utils.ts            cn() helper
     └── simple-loader/
         ├── math.ts         pure framework-free math (phases, blendColor, scatter, node-graph)
@@ -45,8 +45,22 @@ Takes a config (pattern, cellShape, colors, glow, shimmer, paused, etc.) and pai
 Key behaviors to preserve when editing:
 - **Paused**: `useLayoutEffect` paints one frame synchronously on every render so paused loaders immediately show content. The rAF loop runs only when not paused. Tick is in a `useRef` so pause→resume continues, not restarts.
 - **Inactive color**: when a pattern's cell doesn't return an explicit `color`, fill is `blendColor(inactiveCells, primary, opacity)`.
-- **Status patterns** (`success` / `error` / `warning`): force `effectiveSize = 5` regardless of gridSize so the glyph bitmaps from `glyphs.ts` read correctly.
+- **Status patterns** (`success` / `error` / `warning`): force `effectiveSize = 5` and `effectiveGridType = "square"` regardless of user config, so the glyph bitmaps from `glyphs.ts` read correctly.
 - **Off-grid patterns** (`scatter` / `node-graph`): render different element sets; gated by `isOffGrid`.
+
+### Grid types and tessellations
+
+`gridType: "square" | "triangular"` on the instance.
+
+- **Square** — the classic N×N lattice; cells pick a `CellShape` (rounded-rect, square, circle, diamond, hexagon, star).
+- **Triangular** — cells are isoceles / right triangles. The user chooses a `TriangularTessellation`:
+  - `rows` — the original strip tessellation: N rows of 2N−1 alternating up/down isoceles triangles (`triangle-up` / `triangle-down` internal shapes).
+  - `diagonal-bl-tr` / `diagonal-br-tl` — each grid cell is a square split along one diagonal into two **right-triangle** cells (`triangle-ur` + `triangle-dl`, or `triangle-ul` + `triangle-dr`). Each triangle is an independent animated cell; logical column indices are doubled (`2c` / `2c+1`) so patterns that key off `c` treat them as distinct.
+  - `diagonal-switch` — checkerboards the BL-TR and BR-TL splits per `(r+c) % 2`.
+
+All right-triangle shapes are anchored at the **incenter** (not the centroid). This makes uniform scaling about `(cx, cy)` inset every edge by the same perpendicular distance, so the within-cell gap (along the hypotenuse) matches the between-cell gap (along the legs) at every `cellSizeFactor`.
+
+Pattern coordinate rule: patterns in `evalGridPattern` receive both logical `(r, c)` and visual `(gx, gy)` coords (in grid units, roughly `[0, size-1]`). **Line-sweep patterns** (`progress-bar`, `snake`, `bouncing-ball`, `staircase`) must use `gx`/`gy` for row/column/edge membership — cells in the same logical row can sit at different visual heights on triangular tessellations, so `r === midR`-style checks render zigzags. Radial/angle patterns already use `gx`/`gy` via `Math.hypot` etc. and work out of the box.
 
 ## Export
 
@@ -60,7 +74,14 @@ Per-instance Download button → `ExportModal` with five tabs:
 
 ## Persistence
 
-All instances + selection are saved to `localStorage["simple-loader-sandbox-v1"]` on every change. Hydration happens in a client-only `useEffect` after mount (not in the `useState` initializer) so SSR/CSR match. Missing fields on loaded instances are backfilled from `makeInstance()` defaults so schema additions don't lose user state.
+All instances + selection are saved to `localStorage["simple-loader-sandbox-v1"]` on every change. Hydration happens in a client-only `useEffect` after mount (not in the `useState` initializer) so SSR/CSR match. Missing fields on loaded instances are backfilled from `makeInstance()` defaults so schema additions don't lose user state. A small migration step also rewrites legacy values that changed shape (e.g. `triangularTessellation: "diagonal"` → `"diagonal-bl-tr"`).
+
+## "Persisting" vs "Randomly changed" groups
+
+The settings panel is split into two labelled groups. The distinction is load-bearing for `addInstance`:
+
+- **Persisting** (top): `size`, `padding`, `gridType`, `gridSize`, `triangularTessellation`, `cellSizeFactor`, `shape`. These are typed as `Inheritable` and are copied from the currently selected instance when the user clicks `+`. **If you add a new geometry-like field, add it to `Inheritable` and `randomBeautifulConfig`'s return** so it persists across adds.
+- **Randomly changed** (below): `pattern`, `style`, `fps`, `shimmer`, `glow`, `colors`. These are rerolled by `randomBeautifulConfig` in `src/app/page.tsx` on every add.
 
 ## Development
 

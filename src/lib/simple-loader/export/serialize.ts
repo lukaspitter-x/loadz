@@ -1,4 +1,4 @@
-import type { AnimStyle, CellShape, LoaderColors } from "@/lib/types";
+import type { AnimStyle, CellShape, GridType, LoaderColors, TriangularTessellation } from "@/lib/types";
 import type { SimplePattern } from "../patterns";
 import { REACT_TEMPLATE, CONFIG_MARKER } from "./react-template";
 
@@ -7,6 +7,8 @@ export interface PortableConfig {
   size: number;
   padding: number;
   grid: { size: number };
+  gridType: GridType;
+  triangularTessellation: TriangularTessellation;
   cellShape: CellShape;
   cellSizeFactor: number;
   animation: {
@@ -31,6 +33,8 @@ interface Instance {
   size: number;
   padding: number;
   gridSize: number;
+  gridType: GridType;
+  triangularTessellation: TriangularTessellation;
   cellSizeFactor: number;
   colors: LoaderColors;
   transparentBg: boolean;
@@ -44,6 +48,8 @@ export function instanceToConfig(inst: Instance): PortableConfig {
     size: inst.size,
     padding: inst.padding,
     grid: { size: inst.gridSize },
+    gridType: inst.gridType,
+    triangularTessellation: inst.triangularTessellation,
     cellShape: inst.shape,
     cellSizeFactor: inst.cellSizeFactor,
     animation: {

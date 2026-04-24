@@ -7,10 +7,14 @@ import { SimpleLoader } from "@/components/SimpleLoader";
 import { ExportModal } from "@/components/ExportModal";
 import {
   CELL_SHAPES,
+  GRID_TYPES,
   STYLES,
+  TRIANGULAR_TESSELLATIONS,
   type AnimStyle,
   type CellShape,
+  type GridType,
   type LoaderColors,
+  type TriangularTessellation,
 } from "@/lib/types";
 import {
   SIMPLE_PATTERNS,
@@ -40,6 +44,8 @@ interface Instance {
   size: number;
   padding: number;
   gridSize: number;
+  gridType: GridType;
+  triangularTessellation: TriangularTessellation;
   cellSizeFactor: number;
   colors: LoaderColors;
   transparentBg: boolean;
@@ -79,6 +85,8 @@ function makeInstance(overrides: Partial<Instance> & { id?: string } = {}): Inst
     size: 12,
     padding: 1,
     gridSize: 5,
+    gridType: "square",
+    triangularTessellation: "rows",
     cellSizeFactor: 0.5,
     colors: { ...DEFAULT_COLORS },
     transparentBg: false,
@@ -281,7 +289,7 @@ const TEXT_FX_MODES: ("shimmer" | "shine" | "gradient" | "cursor")[] = [
   "cursor",
 ];
 
-type Inheritable = Pick<Instance, "size" | "padding" | "cellSizeFactor" | "shape" | "gridSize">;
+type Inheritable = Pick<Instance, "size" | "padding" | "cellSizeFactor" | "shape" | "gridSize" | "gridType" | "triangularTessellation">;
 
 function pick<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -304,9 +312,12 @@ function ensureReadableText(hex: string): string {
 function randomBeautifulConfig(base: Inheritable, excludePattern?: SimplePattern): Partial<Instance> {
   // Pattern: any non-status (status glyphs carry semantic meaning; don't autogen),
   // and never the same as the caller's last pattern — back-to-back duplicates feel unintentional.
+  // Particle/Network patterns are visually heavier and less broadly appealing;
+  // keep them in the pool but at ~1/8 the weight of other patterns.
+  const DEPRIORITIZED: SimplePattern[] = ["scatter", "node-graph", "constellation", "network-pulse", "molecular"];
   const candidates = SIMPLE_PATTERNS
     .filter((p) => p.group !== "Status" && p.value !== excludePattern)
-    .map((p) => p.value);
+    .flatMap((p) => DEPRIORITIZED.includes(p.value) ? [p.value] : [p.value, p.value, p.value, p.value, p.value, p.value, p.value, p.value]);
   const pattern = pick(candidates);
   const style = pick(["pulse-size", "pulse-opacity", "pulse-color"] as const);
   const fps = pick([18, 20, 24, 24, 24, 30, 36]);
@@ -352,6 +363,8 @@ function randomBeautifulConfig(base: Inheritable, excludePattern?: SimplePattern
     padding: base.padding,
     cellSizeFactor: base.cellSizeFactor,
     shape: base.shape,
+    gridType: base.gridType,
+    triangularTessellation: base.triangularTessellation,
     transparentBg: false,
     paused: false,
   };
@@ -365,8 +378,10 @@ const DEFAULT_INSTANCE_OVERRIDES: Partial<Instance> = {
   fps: 24,
   size: 12,
   padding: 1,
-  gridSize: 5,
-  cellSizeFactor: 0.5,
+  gridSize: 4,
+  gridType: "triangular",
+  triangularTessellation: "rows",
+  cellSizeFactor: 0.75,
   transparentBg: false,
   colors: {
     primary: "#F4C10A",
@@ -387,6 +402,7 @@ const SECOND_DEFAULT_INSTANCE_OVERRIDES: Partial<Instance> = {
   size: 24,
   padding: 1,
   gridSize: 7,
+  gridType: "square",
   cellSizeFactor: 0.5,
   transparentBg: false,
   colors: {
@@ -401,13 +417,15 @@ const SECOND_DEFAULT_INSTANCE_OVERRIDES: Partial<Instance> = {
 
 const THIRD_DEFAULT_INSTANCE_OVERRIDES: Partial<Instance> = {
   displayText: "Processing…",
-  pattern: "dot-wave",
+  pattern: "ring",
   style: "pulse-size",
   shape: "rounded-rect",
   fps: 36,
   size: 8,
   padding: 1,
   gridSize: 3,
+  gridType: "triangular",
+  triangularTessellation: "diagonal-switch",
   cellSizeFactor: 0.75,
   transparentBg: false,
   colors: {
@@ -416,7 +434,7 @@ const THIRD_DEFAULT_INSTANCE_OVERRIDES: Partial<Instance> = {
     background: "#1A0005",
     text: "#e1587d",
   },
-  glow: { enabled: true, size: 1.1, intensity: 1.8 },
+  glow: { enabled: true, size: 1.1, intensity: 1.5 },
   shimmer: { enabled: true, speed: 1.2, mode: "shine" },
 };
 
@@ -441,10 +459,15 @@ function loadPersisted(): PersistedState | null {
     const parsed = JSON.parse(raw) as PersistedState;
     if (!parsed?.instances?.length) return null;
     // Backfill any fields that may be missing if schema evolved
-    const filled = parsed.instances.map((i) => ({
-      ...makeInstance({ id: i.id }),
-      ...i,
-    }));
+    const filled = parsed.instances.map((i) => {
+      const merged: Instance = { ...makeInstance({ id: i.id }), ...i };
+      // Migrate legacy tessellation value shipped briefly before the BL-TR /
+      // BR-TL / Switch split.
+      if ((merged.triangularTessellation as string) === "diagonal") {
+        merged.triangularTessellation = "diagonal-bl-tr";
+      }
+      return merged;
+    });
     const selectedId = filled.some((i) => i.id === parsed.selectedId)
       ? parsed.selectedId
       : filled[0].id;
@@ -581,6 +604,8 @@ export default function Sandbox() {
       cellSizeFactor: selected.cellSizeFactor,
       shape: selected.shape,
       gridSize: selected.gridSize,
+      gridType: selected.gridType,
+      triangularTessellation: selected.triangularTessellation,
     };
     const last = instances[instances.length - 1];
     const n = makeInstance(randomBeautifulConfig(base, last?.pattern));
@@ -806,6 +831,8 @@ export default function Sandbox() {
                       <SimpleLoader
                         displayText=""
                         grid={{ size: inst.gridSize }}
+                        gridType={inst.gridType}
+                        triangularTessellation={inst.triangularTessellation}
                         cellShape={inst.shape}
                         animation={{ pattern: inst.pattern, style: inst.style, fps: inst.fps }}
                         colors={inst.colors}
@@ -826,6 +853,8 @@ export default function Sandbox() {
                       <SimpleLoader
                         displayText={inst.displayText}
                         grid={{ size: inst.gridSize }}
+                        gridType={inst.gridType}
+                        triangularTessellation={inst.triangularTessellation}
                         cellShape={inst.shape}
                         animation={{ pattern: inst.pattern, style: inst.style, fps: inst.fps }}
                         colors={inst.colors}
@@ -881,6 +910,7 @@ export default function Sandbox() {
               <Input value={selected.displayText} onChange={(e) => update({ displayText: e.target.value })} maxLength={40} />
             </Section>
 
+            <Group title="Persisting">
             <Section title="Loader Size">
               <div className="flex gap-1 flex-wrap">
                 {[8, 12, 16, 20, 24, 28, 32].map((n) => {
@@ -933,24 +963,45 @@ export default function Sandbox() {
             </Section>
 
             <Section title="Grid">
-              <div className="flex gap-1">
-                {[3, 4, 5, 6, 7, 8].map((n) => {
-                  const active = selected.gridSize === n;
-                  return (
-                    <button
-                      key={n}
-                      type="button"
-                      onClick={() => update({ gridSize: n })}
-                      className={`h-11 w-11 md:h-8 md:w-8 rounded-md border text-sm font-medium transition-colors ${
-                        active
-                          ? "bg-primary text-primary-foreground border-primary"
-                          : "bg-background hover:bg-accent border-border text-foreground"
-                      }`}
-                    >
-                      {n}
-                    </button>
-                  );
-                })}
+              <div className="space-y-2">
+                <div className="flex gap-1">
+                  {[2, 3, 4, 5, 6, 7, 8, 9].map((n) => {
+                    const active = selected.gridSize === n;
+                    return (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => update({ gridSize: n })}
+                        className={`h-11 w-11 md:h-8 md:w-8 rounded-md border text-sm font-medium transition-colors ${
+                          active
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-background hover:bg-accent border-border text-foreground"
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-1">
+                  {GRID_TYPES.map((gt) => {
+                    const active = selected.gridType === gt.value;
+                    return (
+                      <button
+                        key={gt.value}
+                        type="button"
+                        onClick={() => update({ gridType: gt.value })}
+                        className={`flex-1 h-11 md:h-8 rounded-md border text-sm md:text-xs font-medium transition-colors ${
+                          active
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-background hover:bg-accent border-border text-foreground"
+                        }`}
+                      >
+                        {gt.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </Section>
 
@@ -980,16 +1031,27 @@ export default function Sandbox() {
               </div>
             </Section>
 
-            <Section title="Cell Shape">
-              <SelectField
-                value={selected.shape}
-                onChange={(v) => update({ shape: v as CellShape })}
-                options={CELL_SHAPES.map((s) => ({ value: s, label: s.replace("-", " ") }))}
-                capitalize
-              />
-            </Section>
+            {selected.gridType === "triangular" ? (
+              <Section title="Cell Shape">
+                <SelectField
+                  value={selected.triangularTessellation}
+                  onChange={(v) => update({ triangularTessellation: v as TriangularTessellation })}
+                  options={TRIANGULAR_TESSELLATIONS.map((t) => ({ value: t.value, label: t.label }))}
+                />
+              </Section>
+            ) : (
+              <Section title="Cell Shape">
+                <SelectField
+                  value={selected.shape}
+                  onChange={(v) => update({ shape: v as CellShape })}
+                  options={CELL_SHAPES.map((s) => ({ value: s, label: s.replace("-", " ") }))}
+                  capitalize
+                />
+              </Section>
+            )}
+            </Group>
 
-
+            <Group title="Randomly changed">
             <Section title="Animation">
               <div className="space-y-4">
                 <div className="rounded-md border border-primary/40 bg-primary/5 p-2.5 space-y-2">
@@ -1252,6 +1314,7 @@ export default function Sandbox() {
                 ))}
               </div>
             </Section>
+            </Group>
           </div>
         </aside>
       </div>
@@ -1328,6 +1391,17 @@ function NumberField({
         className="h-5 w-10 rounded-sm border border-border bg-background px-1 text-right text-[10px] font-mono text-foreground focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/40"
       />
       {suffix && <span className="text-[10px] font-mono text-muted-foreground">{suffix}</span>}
+    </div>
+  );
+}
+
+function Group({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-2 pt-1">
+      <div className="px-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-foreground/70">
+        {title}
+      </div>
+      {children}
     </div>
   );
 }

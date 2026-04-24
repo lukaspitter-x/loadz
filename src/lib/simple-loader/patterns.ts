@@ -40,11 +40,6 @@ export const SIMPLE_PATTERNS: { value: SimplePattern; label: string; group: stri
   { value: "wave-diagonal", label: "Grid Wave Diagonal", group: "Grid" },
   { value: "expanding-pulse", label: "Grid Expanding Pulse", group: "Grid" },
   { value: "staircase", label: "Grid Staircase", group: "Grid" },
-  { value: "scatter", label: "Particle Scatter", group: "Particle" },
-  { value: "node-graph", label: "Network Graph", group: "Network" },
-  { value: "constellation", label: "Network Constellation", group: "Network" },
-  { value: "network-pulse", label: "Network Pulse", group: "Network" },
-  { value: "molecular", label: "Network Molecular", group: "Network" },
   { value: "orbit", label: "Spinner Orbit", group: "Spinner" },
   { value: "ring", label: "Spinner Ring", group: "Spinner" },
   { value: "dot-pulse", label: "Dot Pulse", group: "Dots" },
@@ -69,6 +64,11 @@ export const SIMPLE_PATTERNS: { value: SimplePattern; label: string; group: stri
   { value: "success", label: "Status Success", group: "Status" },
   { value: "error", label: "Status Error", group: "Status" },
   { value: "warning", label: "Status Warning", group: "Status" },
+  { value: "scatter", label: "Particle Scatter", group: "Particle" },
+  { value: "node-graph", label: "Network Graph", group: "Network" },
+  { value: "constellation", label: "Network Constellation", group: "Network" },
+  { value: "network-pulse", label: "Network Pulse", group: "Network" },
+  { value: "molecular", label: "Network Molecular", group: "Network" },
 ];
 
 export const STATUS_DEFAULTS: Record<"success" | "error" | "warning", { primary: string; background: string }> = {

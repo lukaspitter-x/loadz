@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Check, Copy, Download, X } from "lucide-react";
-import type { AnimStyle, CellShape, LoaderColors } from "@/lib/types";
+import type { AnimStyle, CellShape, GridType, LoaderColors, TriangularTessellation } from "@/lib/types";
 import type { SimplePattern } from "@/lib/simple-loader/patterns";
 import {
   buildHtmlSnippet,
@@ -21,6 +21,8 @@ interface Instance {
   size: number;
   padding: number;
   gridSize: number;
+  gridType: GridType;
+  triangularTessellation: TriangularTessellation;
   cellSizeFactor: number;
   colors: LoaderColors;
   transparentBg: boolean;
